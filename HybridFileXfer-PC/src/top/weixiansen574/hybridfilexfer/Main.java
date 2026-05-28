@@ -165,8 +165,8 @@ public class Main {
 
         // 解析命令行参数
         final String connect = paramMap.get("-c");
-        String homeDir = paramMap.get("-s");  //因为会修改为默认位置，所以不可以设置为不可变变量
-        final String device = paramMap.get("-d");
+        String homeDir = paramMap.get("-d");  //因为会修改为默认位置，所以不可以设置为不可变变量
+        final String device = paramMap.get("-s");
 
         // 指定默认目录
         if (homeDir == null) {
