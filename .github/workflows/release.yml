@@ -172,7 +172,9 @@ jobs:
           cp "$GITHUB_WORKSPACE/script/"*.bat "$GITHUB_WORKSPACE/script/"*.sh "$GITHUB_WORKSPACE/dist/${PACK}/"
           cp "$GITHUB_WORKSPACE/launcher-out/HybridFileXferLauncher.exe" "$GITHUB_WORKSPACE/dist/${PACK}/start.exe"
           cd "$GITHUB_WORKSPACE/dist"
-          tar -a -c -f "HybridFileXfer-PC.zip" "${PACK}"
+          # bash 里的 tar 是 Git Bash 的 GNU tar，不支持 zip（-a 遇到 .zip 会静默打成 tar）
+          # 必须用 PowerShell 的 Compress-Archive 打真正的 zip
+          pwsh -Command "Compress-Archive -Path '${PACK}' -DestinationPath 'HybridFileXfer-PC.zip' -Force"
           rm -rf "${PACK}"
           ls -lh HybridFileXfer-PC.zip
 
