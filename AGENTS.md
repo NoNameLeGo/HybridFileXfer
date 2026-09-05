@@ -136,28 +136,27 @@ HybridFileXfer/
 
 ### Android 端
 
-```bash
-cd HybridFileXfer-Android
-./gradlew assembleDebug   # 调试包
-./gradlew assembleRelease # 正式包（需签名配置）
-```
+**不要在本地构建 Android 产物（APK）。** Android 构建统一走 GitHub Actions：
+
+- `build.yml`（push 自动触发）：构建 debug/release APK，仅作校验
+- `release.yml`（push tag `v*` 或手动触发）：签名并发布到 GitHub Release
+
+原因：本地没有完整的 SDK/NDK/CMake 环境与签名密钥，产物不可用于交付；CI 环境统一且配置了签名 secrets。需要 APK 时到 Actions 运行结果或 Release 页面下载。
 
 ### PC 端
 
 PC 端为 IntelliJ IDEA 项目（`.iml`），源码在 `src/`，编译输出在 `out/`。
 
-```bash
-# 在 IntelliJ 中直接运行 Main.java
-# 或手动编译
-javac -d out -cp "src" src/top/weixiansen574/hybridfilexfer/*.java \
-  src/top/weixiansen574/hybridfilexfer/core/*.java \
-  src/top/weixiansen574/hybridfilexfer/core/bean/*.java \
-  src/top/weixiansen574/hybridfilexfer/core/callback/*.java \
-  src/top/weixiansen574/hybridfilexfer/jdkcore/*.java \
-  src/top/weixiansen574/hybridfilexfer/nio/*.java
+外部依赖仅一个：jetbrains annotations，已 vendor 在 `libs/annotations-24.0.1.jar`（约 30KB，Apache-2.0，仅编译期使用，不进入运行时）。本地与 CI 均无需联网下载；IntelliJ 内编译仍使用 IDE 自己配置的同一依赖。
 
-# 打 jar
-jar cvf HybridFileXfer.jar -C out .
+```bash
+# 手动编译（与 .github/workflows/release.yml 的命令保持一致）
+find src -name '*.java' > sources.txt
+javac -encoding UTF-8 -cp libs/annotations-24.0.1.jar -d out @sources.txt
+cp src/messages_*.properties out/
+
+# 打 jar（必须引用 src/META-INF/MANIFEST.MF，缺 Main-Class 会让 java -jar 启动即退）
+jar cvfm HybridFileXfer.jar src/META-INF/MANIFEST.MF -C out .
 ```
 
 ---

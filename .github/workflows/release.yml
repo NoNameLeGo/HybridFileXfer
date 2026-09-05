@@ -140,13 +140,14 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf out/pc && mkdir -p out/pc
-          # jetbrains annotations 是 PC 工程的外部依赖（本地由 IntelliJ 提供），从 Maven Central 获取
-          curl -fsSL -o annotations.jar \
-            https://repo1.maven.org/maven2/org/jetbrains/annotations/24.0.1/annotations-24.0.1.jar
+          # jetbrains annotations 已 vendor 在 libs/（Apache-2.0，仅编译期依赖），无需联网下载
           find src -name '*.java' > sources.txt
-          javac -encoding UTF-8 -cp annotations.jar -d out/pc @sources.txt
+          javac -encoding UTF-8 -cp libs/annotations-24.0.1.jar -d out/pc @sources.txt
           cp src/messages_*.properties out/pc/
-          jar cf HybridFileXfer.jar -C out/pc .
+          # 必须带入 src/META-INF/MANIFEST.MF（含 Main-Class），否则 java -jar / start.exe 启动即退
+          jar cfm HybridFileXfer.jar src/META-INF/MANIFEST.MF -C out/pc .
+          # 冒烟测试：manifest 缺 Main-Class 不会让 javac/jar 报错，只能在运行时暴露
+          java -jar HybridFileXfer.jar -v
 
       - name: 'Setup .NET SDK'
         uses: actions/setup-dotnet@v5
@@ -205,7 +206,10 @@ jobs:
           find src -name '*.java' > sources.txt
           javac -encoding UTF-8 -cp annotations.jar -d out/pc @sources.txt
           cp src/messages_*.properties out/pc/
-          jar cf HybridFileXfer.jar -C out/pc .
+          # 必须带入 src/META-INF/MANIFEST.MF（含 Main-Class），否则 java -jar / start.exe 启动即退
+          jar cfm HybridFileXfer.jar src/META-INF/MANIFEST.MF -C out/pc .
+          # 冒烟测试：manifest 缺 Main-Class 不会让 javac/jar 报错，只能在运行时暴露
+          java -jar HybridFileXfer.jar -v
 
       - name: 'Package Linux tar.gz'
         run: |
