@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 'Checkout'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: '${{ github.repository }}'
           ref: '${{ github.ref }}'
@@ -23,13 +23,13 @@ jobs:
           fetch-depth: 0
 
       - name: 'Setup Java 17'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: 17
 
       - name: 'Setup Android SDK'
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
 
       - name: 'Install NDK / CMake / Build-Tools'
         run: |
@@ -43,7 +43,7 @@ jobs:
 
       - name: 'Upload release apk'
         if: '${{ success() }}'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: 'release-apk'
           path: '**/build/outputs/apk/release'
@@ -52,7 +52,7 @@ jobs:
 
       - name: 'Upload debug apk'
         if: '${{ success() }}'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: 'debug-apk'
           path: '**/build/outputs/apk/debug'
@@ -61,7 +61,7 @@ jobs:
 
       - name: 'Upload mapping files'
         if: '${{ success() }}'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: 'mappings'
           path: '**/build/outputs/mapping'
