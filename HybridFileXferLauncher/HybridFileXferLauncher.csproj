@@ -24,6 +24,7 @@
 	<ItemGroup>
 		<Using Include="System.ComponentModel" />
 		<Using Include="System.Diagnostics" />
+		<Using Include="System.Text" />
 	</ItemGroup>
 
 </Project>
