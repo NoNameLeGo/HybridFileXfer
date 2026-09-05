@@ -17,7 +17,7 @@ public class JdkReadFileCall extends ReadFileCall {
     private RandomAccessFile randomAccessFile;
     private FileChannel channel;
 
-    public JdkReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints) {
+    public JdkReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Long> checkpoints) {
         super(buffers, files, localDir, remoteDir, operateThreadCount, checkpoints);
     }
 

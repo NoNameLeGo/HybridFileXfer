@@ -16,7 +16,7 @@ public class JdkWriteFileCall extends WriteFileCall {
     private FileChannel channel;
 
     public JdkWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount,
-                            Map<String, Integer> checkpoints, CheckpointManager checkpointManager, String peerId) {
+                            Map<String, Long> checkpoints, CheckpointManager checkpointManager, String peerId) {
         super(buffers, dequeCount, checkpoints, checkpointManager, peerId);
     }
 

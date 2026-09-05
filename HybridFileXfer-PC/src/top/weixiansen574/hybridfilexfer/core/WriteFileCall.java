@@ -14,15 +14,15 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
     private final LinkedBlockingDeque<ByteBuffer> buffers;
     private final boolean[] channelFinished;
     private final ArrayList<LinkedList<FileBlock>> dequeArray;
-    /** 断点续传：传输路径 → 已完成块数 */
-    private final Map<String, Integer> checkpoints;
+    /** 断点续传：传输路径 → 已确认完成的字节偏移（与块大小解耦） */
+    private final Map<String, Long> checkpoints;
     private final CheckpointManager checkpointManager;
     private final String peerId;
     private final AtomicLong completedBytes = new AtomicLong(0);
     private boolean canceled = false;
 
     public WriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount,
-                         Map<String, Integer> checkpoints, CheckpointManager checkpointManager, String peerId) {
+                         Map<String, Long> checkpoints, CheckpointManager checkpointManager, String peerId) {
         this.buffers = buffers;
         this.checkpoints = checkpoints;
         this.checkpointManager = checkpointManager;
@@ -48,8 +48,8 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
             RandomAccessFile lastRaf = null;*/
             FileChannel lastChannel = null;
             long cursor = 0;
-            //当前文件的断点续传跳过块数（在打开新文件时确定）
-            int skipBlocks = 0;
+            //当前文件的断点续传跳过字节数（在打开新文件时确定）
+            long skipBytes = 0;
 
             while (block != null) {
                 if (block.isDirectory()) {
@@ -76,15 +76,15 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
                     raf.setLength(block.totalSize);
                     channel = raf.getChannel();*/
                     channel = createAndOpenFile(block.path, block.totalSize);
-                    //断点续传：跳过已有数据的块
-                    skipBlocks = checkpoints.getOrDefault(block.path, 0);
-                    long skipBytes = (long) skipBlocks * FileBlock.BLOCK_SIZE;
-                    if (skipBlocks > 0 && channel.size() < skipBytes) {
+                    //断点续传：跳过已有数据的部分（字节偏移为持久化单位）。
+                    //持久化值可能来自不同的块大小配置，与发送端一致地对齐到当前块大小边界
+                    skipBytes = (checkpoints.getOrDefault(block.path, 0L) / FileBlock.BLOCK_SIZE) * FileBlock.BLOCK_SIZE;
+                    if (skipBytes > 0 && channel.size() < skipBytes) {
                         //握手后目标文件被删除/截断：skip 状态已失效，抛错终止本次传输，
                         //下次握手时磁盘校验会判定检查点无效，从而全量重传，避免写出空洞文件
                         throw new IOException("checkpoint stale: target file missing or truncated: " + block.path);
                     }
-                    if (skipBlocks > 0) {
+                    if (skipBytes > 0) {
                         //检查点显示的已完成数据会计入进度
                         completedBytes.addAndGet(Math.min(skipBytes, block.totalSize));
                     }
@@ -98,8 +98,8 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
                     cursor = block.getStartPosition();
                     channel.position(cursor);
                 }
-                //断点续传：跳过已被跳过的块（不写入磁盘；进度已在打开文件时计入）
-                if (block.index < skipBlocks) {
+                //断点续传：跳过已被确认的块（不写入磁盘；进度已在打开文件时计入）
+                if (block.getStartPosition() < skipBytes) {
                     //回收缓冲区块
                     buffers.add(block.data);
                     lastBlock = block;
@@ -115,11 +115,12 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
                 ByteBuffer data = block.data;
                 data.flip();
                 channel.write(data);
-                cursor += data.position();
-                completedBytes.addAndGet(data.position());
-                //保存检查点：记录当前文件已完成块数
+                int written = data.position();
+                cursor += written;
+                completedBytes.addAndGet(written);
+                //保存检查点：记录当前文件已确认完成的字节偏移（块头位置 + 本块实际写入字节）
                 checkpointManager.saveCheckpoint(block.path, block.totalSize,
-                        block.lastModified, block.index + 1, peerId);
+                        block.lastModified, (long) block.index * FileBlock.BLOCK_SIZE + written, peerId);
                 //回收缓冲区块
                 buffers.add(block.data);
                 lastBlock = block;

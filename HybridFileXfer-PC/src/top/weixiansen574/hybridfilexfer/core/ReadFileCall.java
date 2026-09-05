@@ -23,11 +23,12 @@ public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
     private final Directory localDir;
     private final Directory remoteDir;
     private final int operateThreadCount;
-    private final Map<String, Integer> checkpoints;
+    /** 断点续传：本地源路径 → 已确认完成的字节偏移 */
+    private final Map<String, Long> checkpoints;
     private final AtomicLong completedBytes = new AtomicLong(0);
     private int fileIndex = -1;
 
-    public ReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints) {
+    public ReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Long> checkpoints) {
         this.buffers = buffers;
         this.files = files;
         this.localDir = localDir;
@@ -90,23 +91,21 @@ public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
         FileChannel channel = openFile(file.getPath());
         long length = channel.size();
         long lastModified = file.lastModified();
-        //断点续传：跳过已传输完成的块
-        int skipBlocks = 0;
-        Integer checkpoint = checkpoints.get(file.getPath());
-        if (checkpoint != null) {
-            skipBlocks = checkpoint;
-        }
+        //断点续传：跳过已确认完成的字节（偏移为持久化单位，与块大小无关）。
+        //持久化值可能来自不同的块大小配置，与接收端一致地对齐到当前块大小边界，
+        //对齐后的整块从该边界重传，不多不漏
+        long skipBytes = checkpoints.getOrDefault(file.getPath(), 0L);
+        long alignedSkip = (skipBytes / FileBlock.BLOCK_SIZE) * FileBlock.BLOCK_SIZE;
         long remaining = length;
-        if (skipBlocks > 0) {
-            long skipBytes = (long) skipBlocks * FileBlock.BLOCK_SIZE;
-            if (skipBytes >= length) {
+        if (alignedSkip > 0) {
+            if (alignedSkip >= length) {
                 //整个文件已传完（或文件被改动变小），无需再发送任何块，接收方保留现有文件
                 closeFile();
                 return;
             }
-            channel.position(skipBytes);
-            remaining -= skipBytes;
-            completedBytes.addAndGet(skipBytes);
+            channel.position(alignedSkip);
+            remaining -= alignedSkip;
+            completedBytes.addAndGet(alignedSkip);
         }
         if (length == 0){
             ByteBuffer buffer = buffers.take();
@@ -118,7 +117,8 @@ public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
             closeFile();
             return;
         }
-        int i = skipBlocks;
+        //起始块索引：从对齐后的字节位置对应的块开始
+        int i = (int) (alignedSkip / FileBlock.BLOCK_SIZE);
         while (remaining > 0){
             int blkSize = (int) Math.min(remaining,FileBlock.BLOCK_SIZE);
             ByteBuffer buffer = buffers.take();

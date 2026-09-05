@@ -69,19 +69,18 @@ public class JdkHFXClient extends HFXClient {
     }
 
     @Override
-    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Integer> checkpoints) {
+    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Long> checkpoints) {
         return new JdkWriteFileCall(buffers, dequeCount, checkpoints, getCheckpointManager(), peerId);
     }
 
     @Override
-    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints) {
+    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Long> checkpoints) {
         return new JdkReadFileCall(buffers, files, localDir, remoteDir, operateThreadCount, checkpoints);
     }
 
     @Override
     protected boolean isCheckpointValid(String transferPath, CheckpointEntry entry) {
         File file = new File(transferPath);
-        long skipBytes = (long) entry.completedBlocks * top.weixiansen574.hybridfilexfer.core.FileBlock.BLOCK_SIZE;
-        return file.isFile() && file.length() >= skipBytes;
+        return file.isFile() && file.length() >= entry.completedBytes;
     }
 }

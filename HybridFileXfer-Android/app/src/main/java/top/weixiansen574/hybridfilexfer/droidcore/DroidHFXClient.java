@@ -70,20 +70,19 @@ public class DroidHFXClient extends HFXClient {
     }
 
     @Override
-    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Integer> checkpoints) {
+    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Long> checkpoints) {
         return new DroidWriteFileCall(buffers, dequeCount, iioService, checkpoints, getCheckpointManager(), peerId);
     }
 
     @Override
-    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints) {
+    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Long> checkpoints) {
         return new DroidReadFileCall(iioService, buffers, files, localDir, remoteDir, operateThreadCount, checkpoints);
     }
 
     @Override
     protected boolean isCheckpointValid(String transferPath, CheckpointEntry entry) {
         try {
-            long skipBytes = (long) entry.completedBlocks * top.weixiansen574.hybridfilexfer.core.FileBlock.BLOCK_SIZE;
-            return iioService.isFile(transferPath) && iioService.getFileSize(transferPath) >= skipBytes;
+            return iioService.isFile(transferPath) && iioService.getFileSize(transferPath) >= entry.completedBytes;
         } catch (RemoteException e) {
             return false;
         }

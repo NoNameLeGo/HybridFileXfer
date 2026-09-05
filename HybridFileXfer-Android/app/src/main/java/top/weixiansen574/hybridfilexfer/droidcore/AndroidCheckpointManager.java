@@ -28,8 +28,8 @@ public class AndroidCheckpointManager implements CheckpointManager {
     }
 
     @Override
-    public void saveCheckpoint(String filePath, long totalSize, long lastModified, int completedBlocks, String peerId) {
-        configDB.saveCheckpoint(filePath, totalSize, lastModified, completedBlocks, peerId);
+    public void saveCheckpoint(String filePath, long totalSize, long lastModified, long completedBytes, String peerId) {
+        configDB.saveCheckpoint(filePath, totalSize, lastModified, completedBytes, peerId);
     }
 
     @Override

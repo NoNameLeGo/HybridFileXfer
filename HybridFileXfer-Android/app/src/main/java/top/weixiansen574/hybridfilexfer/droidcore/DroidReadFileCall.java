@@ -21,7 +21,7 @@ public class DroidReadFileCall extends ReadFileCall {
     private FileInputStream fileInputStream;
     private FileChannel channel;
 
-    public DroidReadFileCall(IIOService ioService, LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints) {
+    public DroidReadFileCall(IIOService ioService, LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Long> checkpoints) {
         super(buffers, files, localDir, remoteDir, operateThreadCount, checkpoints);
         this.ioService = ioService;
     }

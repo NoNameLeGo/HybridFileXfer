@@ -7,7 +7,8 @@ import top.weixiansen574.hybridfilexfer.core.bean.RemoteFile;
 
 /**
  * 断点续传检查点数据层抽象。
- * <p>键约定：filePath 使用接收方的传输路径（对端落盘路径），peerId 用于区分不同对端。</p>
+ * <p>持久化单位为字节偏移（completedBytes），与分块大小解耦；
+ * 键约定：filePath 使用接收方的传输路径（对端落盘路径），peerId 用于区分不同对端。</p>
  */
 public interface CheckpointManager {
 
@@ -17,10 +18,10 @@ public interface CheckpointManager {
      * @param filePath        接收方文件路径（传输路径）
      * @param totalSize       文件总大小
      * @param lastModified    文件最后修改时间
-     * @param completedBlocks 已完成的块数
+     * @param completedBytes  已确认完成的字节偏移
      * @param peerId          对端标识
      */
-    void saveCheckpoint(String filePath, long totalSize, long lastModified, int completedBlocks, String peerId);
+    void saveCheckpoint(String filePath, long totalSize, long lastModified, long completedBytes, String peerId);
 
     /**
      * 加载文件列表中匹配的检查点。

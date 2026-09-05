@@ -19,7 +19,7 @@ public class DroidWriteFileCall extends WriteFileCall {
     private FileOutputStream fileOutputStream;
     private FileChannel channel;
     public DroidWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, IIOService ioService,
-                              Map<String, Integer> checkpoints, CheckpointManager checkpointManager, String peerId) {
+                              Map<String, Long> checkpoints, CheckpointManager checkpointManager, String peerId) {
         super(buffers, dequeCount, checkpoints, checkpointManager, peerId);
         this.ioService = ioService;
     }

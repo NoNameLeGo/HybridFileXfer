@@ -35,7 +35,7 @@ public abstract class HFXService {
     protected abstract CheckpointManager createCheckpointManager();
 
     protected boolean sendFiles(List<RemoteFile> fileList,Directory localDir, Directory remoteDir, TransferFileCallback callback) throws IOException {
-        //0. 断点续传握手：请求接收方返回检查点（传输路径 → 已完成块数）
+        //0. 断点续传握手：请求接收方返回检查点（传输路径 → 已确认完成的字节偏移）
         ctChannel.writeShort(ControllerIdentifiers.CHECKPOINT_REQUEST);
         //发送文件列表（传输路径），供接收方匹配本地检查点
         int dirFileCount = fileList.size();
@@ -46,20 +46,20 @@ public abstract class HFXService {
             ctChannel.writeLong(file.lastModified());
             ctChannel.writeBoolean(file.isDirectory());
         }
-        Map<String, Integer> remoteCheckpoints = new HashMap<>();
+        Map<String, Long> remoteCheckpoints = new HashMap<>();
         int checkpointCount = ctChannel.readInt();
         for (int i = 0; i < checkpointCount; i++) {
-            remoteCheckpoints.put(ctChannel.readUTF(), ctChannel.readInt());
+            remoteCheckpoints.put(ctChannel.readUTF(), ctChannel.readLong());
         }
         //将接收方以传输路径为键的检查点，转换为以本地源路径为键
-        Map<String, Integer> checkpoints = new HashMap<>(remoteCheckpoints.size());
+        Map<String, Long> checkpoints = new HashMap<>(remoteCheckpoints.size());
         for (RemoteFile file : fileList) {
             if (file.isDirectory()) {
                 continue;
             }
-            Integer skipBlocks = remoteCheckpoints.get(localDir.generateTransferPath(file.getPath(), remoteDir));
-            if (skipBlocks != null) {
-                checkpoints.put(file.getPath(), skipBlocks);
+            Long completedBytes = remoteCheckpoints.get(localDir.generateTransferPath(file.getPath(), remoteDir));
+            if (completedBytes != null) {
+                checkpoints.put(file.getPath(), completedBytes);
             }
         }
 
@@ -161,7 +161,7 @@ public abstract class HFXService {
         }
         //按文件列表匹配本地检查点（peerId + totalSize + lastModified 校验）
         Map<String, CheckpointEntry> entries = getCheckpointManager().loadCheckpoints(fileList, peerId);
-        Map<String, Integer> checkpoints = new HashMap<>(entries.size());
+        Map<String, Long> checkpoints = new HashMap<>(entries.size());
         long totalBytes = 0;
         int totalFiles = 0;
         for (RemoteFile file : fileList) {
@@ -174,14 +174,14 @@ public abstract class HFXService {
             //仅当目标文件在磁盘上依然有效（存在且长度 >= 检查点字节）时才启用续传；
             //无效（被删除/截断）则不带该检查点，发送方会全量重传
             if (entry != null && isCheckpointValid(file.getPath(), entry)) {
-                checkpoints.put(file.getPath(), entry.completedBlocks);
+                checkpoints.put(file.getPath(), entry.completedBytes);
             }
         }
         //写回检查点响应
         ctChannel.writeInt(checkpoints.size());
-        for (Map.Entry<String, Integer> e : checkpoints.entrySet()) {
+        for (Map.Entry<String, Long> e : checkpoints.entrySet()) {
             ctChannel.writeUTF(e.getKey());
-            ctChannel.writeInt(e.getValue());
+            ctChannel.writeLong(e.getValue());
         }
         callback.onTransferStarted(totalBytes, totalFiles);
 
@@ -242,9 +242,9 @@ public abstract class HFXService {
         return true;
     }
 
-    protected abstract WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Integer> checkpoints);
+    protected abstract WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Long> checkpoints);
 
-    protected abstract ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints);
+    protected abstract ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Long> checkpoints);
 
     /**
      * 平台层磁盘校验：检查点对应的目标文件是否依然有效（存在且长度不小于已完成字节数）。

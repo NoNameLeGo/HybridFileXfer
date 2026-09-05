@@ -20,7 +20,7 @@ import top.weixiansen574.hybridfilexfer.core.bean.RemoteFile;
 
 @SuppressLint("Range")
 public class ConfigDB extends SQLiteOpenHelper {
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
     private static ConfigDB instance;
     private ConfigDB(@Nullable Context context) {
         super(context, "config", null, VERSION);
@@ -50,7 +50,7 @@ public class ConfigDB extends SQLiteOpenHelper {
         db.execSQL(CREATE_TRANSFER_CHECKPOINT_TABLE);
     }
 
-    //断点续传：传输检查点表
+    //断点续传：传输检查点表（completed_bytes 为字节偏移持久化单位，与块大小解耦）
     private static final String CREATE_TRANSFER_CHECKPOINT_TABLE =
             "CREATE TABLE transfer_checkpoint (\n" +
             "    id               INTEGER PRIMARY KEY AUTOINCREMENT\n" +
@@ -58,7 +58,7 @@ public class ConfigDB extends SQLiteOpenHelper {
             "    file_path        TEXT    NOT NULL,\n" +
             "    total_size       INTEGER NOT NULL,\n" +
             "    last_modified    INTEGER NOT NULL,\n" +
-            "    completed_blocks INTEGER NOT NULL DEFAULT 0,\n" +
+            "    completed_bytes  INTEGER NOT NULL DEFAULT 0,\n" +
             "    peer_id          TEXT    NOT NULL,\n" +
             "    timestamp        INTEGER NOT NULL,\n" +
             "    UNIQUE(file_path, peer_id)\n" +
@@ -68,6 +68,14 @@ public class ConfigDB extends SQLiteOpenHelper {
     public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
         if (oldVersion < 2) {
             db.execSQL(CREATE_TRANSFER_CHECKPOINT_TABLE);
+        } else if (oldVersion < 3) {
+            //v2 表使用 completed_blocks（块数）持久化，迁移为 completed_bytes（字节偏移）
+            db.execSQL("ALTER TABLE transfer_checkpoint RENAME TO transfer_checkpoint_old");
+            db.execSQL(CREATE_TRANSFER_CHECKPOINT_TABLE);
+            db.execSQL("INSERT INTO transfer_checkpoint (file_path, total_size, last_modified, completed_bytes, peer_id, timestamp) " +
+                    "SELECT file_path, total_size, last_modified, completed_blocks * 1048576, peer_id, timestamp " +
+                    "FROM transfer_checkpoint_old");
+            db.execSQL("DROP TABLE transfer_checkpoint_old");
         }
     }
 
@@ -140,14 +148,16 @@ public class ConfigDB extends SQLiteOpenHelper {
 
     /**
      * 保存/更新一个文件的检查点（(file_path, peer_id) 唯一，冲突时替换）。
+     *
+     * @param completedBytes 已确认完成的字节偏移
      */
     public void saveCheckpoint(String filePath, long totalSize, long lastModified,
-                               int completedBlocks, String peerId) {
+                               long completedBytes, String peerId) {
         ContentValues cv = new ContentValues();
         cv.put("file_path", filePath);
         cv.put("total_size", totalSize);
         cv.put("last_modified", lastModified);
-        cv.put("completed_blocks", completedBlocks);
+        cv.put("completed_bytes", completedBytes);
         cv.put("peer_id", peerId);
         cv.put("timestamp", System.currentTimeMillis());
         getWritableDatabase().insertWithOnConflict("transfer_checkpoint", null, cv,
@@ -174,7 +184,7 @@ public class ConfigDB extends SQLiteOpenHelper {
                     path,
                     cursor.getLong(cursor.getColumnIndex("total_size")),
                     cursor.getLong(cursor.getColumnIndex("last_modified")),
-                    cursor.getInt(cursor.getColumnIndex("completed_blocks")),
+                    cursor.getLong(cursor.getColumnIndex("completed_bytes")),
                     cursor.getString(cursor.getColumnIndex("peer_id")),
                     cursor.getLong(cursor.getColumnIndex("timestamp"))
             ));

@@ -321,20 +321,19 @@ public class HFXServer extends HFXService {
     }
 
     @Override
-    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Integer> checkpoints) {
+    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Long> checkpoints) {
         return new DroidWriteFileCall(buffers, dequeCount, ioService, checkpoints, getCheckpointManager(), peerId);
     }
 
     @Override
-    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints) {
+    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Long> checkpoints) {
         return new DroidReadFileCall(ioService, buffers, files, localDir, remoteDir, operateThreadCount, checkpoints);
     }
 
     @Override
     protected boolean isCheckpointValid(String transferPath, CheckpointEntry entry) {
         try {
-            long skipBytes = (long) entry.completedBlocks * FileBlock.BLOCK_SIZE;
-            return ioService.isFile(transferPath) && ioService.getFileSize(transferPath) >= skipBytes;
+            return ioService.isFile(transferPath) && ioService.getFileSize(transferPath) >= entry.completedBytes;
         } catch (RemoteException e) {
             return false;
         }

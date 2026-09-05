@@ -46,9 +46,9 @@ public class JdkCheckpointManager implements CheckpointManager {
     }
 
     @Override
-    public synchronized void saveCheckpoint(String filePath, long totalSize, long lastModified, int completedBlocks, String peerId) {
+    public synchronized void saveCheckpoint(String filePath, long totalSize, long lastModified, long completedBytes, String peerId) {
         entries.put(key(filePath, peerId),
-                new CheckpointEntry(filePath, totalSize, lastModified, completedBlocks, peerId, System.currentTimeMillis()));
+                new CheckpointEntry(filePath, totalSize, lastModified, completedBytes, peerId, System.currentTimeMillis()));
         writeToDisk();
     }
 
@@ -139,7 +139,7 @@ public class JdkCheckpointManager implements CheckpointManager {
         return "{\"filePath\":\"" + escape(entry.filePath)
                 + "\",\"totalSize\":" + entry.totalSize
                 + ",\"lastModified\":" + entry.lastModified
-                + ",\"completedBlocks\":" + entry.completedBlocks
+                + ",\"completedBytes\":" + entry.completedBytes
                 + ",\"peerId\":\"" + escape(entry.peerId)
                 + "\",\"timestamp\":" + entry.timestamp + "}";
     }
@@ -167,17 +167,27 @@ public class JdkCheckpointManager implements CheckpointManager {
         String peerId = fields.get("peerId");
         String totalSize = fields.get("totalSize");
         String lastModified = fields.get("lastModified");
-        String completedBlocks = fields.get("completedBlocks");
         String timestamp = fields.get("timestamp");
         if (filePath == null || peerId == null || totalSize == null
-                || lastModified == null || completedBlocks == null || timestamp == null) {
+                || lastModified == null || timestamp == null) {
             return null;
         }
         try {
+            long completedBytes;
+            String bytesField = fields.get("completedBytes");
+            String blocksField = fields.get("completedBlocks");
+            if (bytesField != null) {
+                completedBytes = Long.parseLong(bytesField);
+            } else if (blocksField != null) {
+                //兼容旧格式：completedBlocks（块数）按 1MB 块换算为字节偏移
+                completedBytes = Long.parseLong(blocksField) * (long) top.weixiansen574.hybridfilexfer.core.FileBlock.BLOCK_SIZE;
+            } else {
+                return null;
+            }
             return new CheckpointEntry(filePath,
                     Long.parseLong(totalSize),
                     Long.parseLong(lastModified),
-                    Integer.parseInt(completedBlocks),
+                    completedBytes,
                     peerId,
                     Long.parseLong(timestamp));
         } catch (NumberFormatException e) {
