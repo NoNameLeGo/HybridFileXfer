@@ -6,9 +6,11 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.Map;
 import java.util.concurrent.LinkedBlockingDeque;
 
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
+import top.weixiansen574.hybridfilexfer.core.CheckpointManager;
 import top.weixiansen574.hybridfilexfer.core.WriteFileCall;
 
 public class DroidWriteFileCall extends WriteFileCall {
@@ -16,8 +18,9 @@ public class DroidWriteFileCall extends WriteFileCall {
     private ParcelFileDescriptor pfd;
     private FileOutputStream fileOutputStream;
     private FileChannel channel;
-    public DroidWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, IIOService ioService) {
-        super(buffers, dequeCount);
+    public DroidWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, IIOService ioService,
+                              Map<String, Integer> checkpoints, CheckpointManager checkpointManager, String peerId) {
+        super(buffers, dequeCount, checkpoints, checkpointManager, peerId);
         this.ioService = ioService;
     }
 

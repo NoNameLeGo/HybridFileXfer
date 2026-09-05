@@ -32,6 +32,8 @@ public abstract class HFXClient extends HFXService {
 
     public boolean connect(ConnectServerCallback callback) throws IOException {
         try {
+            //以服务器地址作为对端标识（断点续传检查点键）
+            peerId = serverControllerAddress;
             //System.out.println("正在连接控制通道：" + serverControllerAddress);
             callback.onConnectingControlChannel(serverControllerAddress, serverPort);
             ctChannel = new DataByteChannel(SocketChannel

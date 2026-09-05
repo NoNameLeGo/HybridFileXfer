@@ -38,7 +38,9 @@ public class IOServiceImpl extends IIOService.Stub {
         try {
             File file = new File(path);
             RandomAccessFile randomAccessFile = new RandomAccessFile(file,"rw");
-            randomAccessFile.setLength(length);
+            //不做 setLength 预分配：文件大小自然反映"已写到的位置"，
+            //断点续传时 WriteFileCall 依据 channel.size() 判断是否需要从头写；
+            //若目标文件不存在（用户删除），size 为 0 会触发从头传输，避免写出空洞文件。
             randomAccessFile.close();
             return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_WRITE_ONLY);
         } catch (IOException e) {
@@ -120,6 +122,10 @@ public class IOServiceImpl extends IIOService.Stub {
 
     public boolean fileExists(String path){
         return new File(path).exists();
+    }
+
+    public long getFileSize(String path){
+        return new File(path).length();
     }
 
     public boolean isFile(String path){

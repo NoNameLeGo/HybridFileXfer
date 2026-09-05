@@ -1,5 +1,6 @@
 package top.weixiansen574.hybridfilexfer.droidcore;
 
+import android.content.Context;
 import android.os.RemoteException;
 
 import java.io.IOException;
@@ -10,6 +11,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingDeque;
@@ -17,6 +19,8 @@ import java.util.concurrent.LinkedBlockingDeque;
 import top.weixiansen574.async.BackstageTask;
 import top.weixiansen574.hybridfilexfer.NativeMemory;
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
+import top.weixiansen574.hybridfilexfer.core.CheckpointEntry;
+import top.weixiansen574.hybridfilexfer.core.CheckpointManager;
 import top.weixiansen574.hybridfilexfer.core.ControllerIdentifiers;
 import top.weixiansen574.hybridfilexfer.core.FileBlock;
 import top.weixiansen574.hybridfilexfer.core.HFXService;
@@ -36,12 +40,14 @@ import top.weixiansen574.nio.DataByteChannel;
 public class HFXServer extends HFXService {
     public static HFXServer instance;
     protected final IIOService ioService;
+    private final Context context;
     protected ServerSocketChannel serverSocketChannel;
     protected int remoteFileSystem;
     protected String remoteHomeDir;
 
-    public HFXServer(IIOService ioService) {
+    public HFXServer(IIOService ioService, Context context) {
         this.ioService = ioService;
+        this.context = context;
     }
 
     public void startServer(int port, List<ServerNetInterface> interfaceList, int localBufferCount, int remoteBufferCount, StartServerCallback callback) throws IOException {
@@ -62,7 +68,10 @@ public class HFXServer extends HFXService {
         conn:
         while (true) {
             //协议判断
-            ctChannel = new DataByteChannel(serverSocketChannel.accept());
+            java.nio.channels.SocketChannel socketChannel = serverSocketChannel.accept();
+            //以控制通道对端地址作为对端标识（断点续传检查点键）
+            peerId = ((InetSocketAddress) socketChannel.getRemoteAddress()).getAddress().getHostAddress();
+            ctChannel = new DataByteChannel(socketChannel);
             byte[] headerBytes = HFXServer.CLIENT_HEADER.getBytes(StandardCharsets.UTF_8);
             byte[] header = new byte[headerBytes.length];
             ctChannel.readFully(header);
@@ -307,12 +316,27 @@ public class HFXServer extends HFXService {
     }
 
     @Override
-    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount) {
-        return new DroidWriteFileCall(buffers,dequeCount,ioService);
+    protected CheckpointManager createCheckpointManager() {
+        return new AndroidCheckpointManager(context);
     }
 
     @Override
-    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount) {
-        return new DroidReadFileCall(ioService,buffers,files,localDir,remoteDir,operateThreadCount);
+    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Integer> checkpoints) {
+        return new DroidWriteFileCall(buffers, dequeCount, ioService, checkpoints, getCheckpointManager(), peerId);
+    }
+
+    @Override
+    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints) {
+        return new DroidReadFileCall(ioService, buffers, files, localDir, remoteDir, operateThreadCount, checkpoints);
+    }
+
+    @Override
+    protected boolean isCheckpointValid(String transferPath, CheckpointEntry entry) {
+        try {
+            long skipBytes = (long) entry.completedBlocks * FileBlock.BLOCK_SIZE;
+            return ioService.isFile(transferPath) && ioService.getFileSize(transferPath) >= skipBytes;
+        } catch (RemoteException e) {
+            return false;
+        }
     }
 }

@@ -1,5 +1,6 @@
 package top.weixiansen574.hybridfilexfer.jdkcore;
 
+import top.weixiansen574.hybridfilexfer.core.CheckpointManager;
 import top.weixiansen574.hybridfilexfer.core.WriteFileCall;
 
 import java.io.File;
@@ -7,14 +8,16 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.Map;
 import java.util.concurrent.LinkedBlockingDeque;
 
 public class JdkWriteFileCall extends WriteFileCall {
     private RandomAccessFile file;
     private FileChannel channel;
 
-    public JdkWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount) {
-        super(buffers, dequeCount);
+    public JdkWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount,
+                            Map<String, Integer> checkpoints, CheckpointManager checkpointManager, String peerId) {
+        super(buffers, dequeCount, checkpoints, checkpointManager, peerId);
     }
 
     @Override
@@ -36,7 +39,9 @@ public class JdkWriteFileCall extends WriteFileCall {
     @Override
     protected FileChannel createAndOpenFile(String path, long length) throws Exception {
         file = new RandomAccessFile(path, "rw");
-        file.setLength(length);
+        //不做 setLength 预分配：文件大小自然反映"已写到的位置"，
+        //断点续传时 WriteFileCall 依据 channel.size() 判断是否需要从头写；
+        //若目标文件不存在（用户删除），size 为 0 会触发从头传输，避免写出空洞文件。
         channel = file.getChannel();
         return channel;
     }

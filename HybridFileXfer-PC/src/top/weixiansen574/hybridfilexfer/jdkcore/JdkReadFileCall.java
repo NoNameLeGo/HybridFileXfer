@@ -10,14 +10,15 @@ import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.LinkedBlockingDeque;
 
 public class JdkReadFileCall extends ReadFileCall {
     private RandomAccessFile randomAccessFile;
     private FileChannel channel;
 
-    public JdkReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount) {
-        super(buffers, files, localDir, remoteDir, operateThreadCount);
+    public JdkReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints) {
+        super(buffers, files, localDir, remoteDir, operateThreadCount, checkpoints);
     }
 
     @Override

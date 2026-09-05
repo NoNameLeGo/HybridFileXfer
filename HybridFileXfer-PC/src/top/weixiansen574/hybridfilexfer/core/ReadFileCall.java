@@ -3,13 +3,15 @@ package top.weixiansen574.hybridfilexfer.core;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.atomic.AtomicLong;
 
 import top.weixiansen574.hybridfilexfer.core.bean.Directory;
 import top.weixiansen574.hybridfilexfer.core.bean.RemoteFile;
 
-public abstract class ReadFileCall implements Callable<Void> {
+public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
     public static final FileBlock END_POINT = new FileBlock(true, -1, "END_POINT", 0, 0, -1, null);
     public static final FileBlock INTERRUPT = new FileBlock(true, -1, "INTERRUPT", 0, 0, -1, null);
     public static final FileBlock READ_ERROR = new FileBlock(true, -1, "READ_ERROR", 0, 0, -1, null);
@@ -21,14 +23,22 @@ public abstract class ReadFileCall implements Callable<Void> {
     private final Directory localDir;
     private final Directory remoteDir;
     private final int operateThreadCount;
+    private final Map<String, Integer> checkpoints;
+    private final AtomicLong completedBytes = new AtomicLong(0);
     private int fileIndex = -1;
 
-    public ReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount) {
+    public ReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints) {
         this.buffers = buffers;
         this.files = files;
         this.localDir = localDir;
         this.remoteDir = remoteDir;
         this.operateThreadCount = operateThreadCount;
+        this.checkpoints = checkpoints;
+    }
+
+    @Override
+    public long getCompletedBytes() {
+        return completedBytes.get();
     }
 
     @Override
@@ -80,7 +90,24 @@ public abstract class ReadFileCall implements Callable<Void> {
         FileChannel channel = openFile(file.getPath());
         long length = channel.size();
         long lastModified = file.lastModified();
+        //断点续传：跳过已传输完成的块
+        int skipBlocks = 0;
+        Integer checkpoint = checkpoints.get(file.getPath());
+        if (checkpoint != null) {
+            skipBlocks = checkpoint;
+        }
         long remaining = length;
+        if (skipBlocks > 0) {
+            long skipBytes = (long) skipBlocks * FileBlock.BLOCK_SIZE;
+            if (skipBytes >= length) {
+                //整个文件已传完（或文件被改动变小），无需再发送任何块，接收方保留现有文件
+                closeFile();
+                return;
+            }
+            channel.position(skipBytes);
+            remaining -= skipBytes;
+            completedBytes.addAndGet(skipBytes);
+        }
         if (length == 0){
             ByteBuffer buffer = buffers.take();
             buffer.clear();
@@ -91,7 +118,7 @@ public abstract class ReadFileCall implements Callable<Void> {
             closeFile();
             return;
         }
-        int i = 0;
+        int i = skipBlocks;
         while (remaining > 0){
             int blkSize = (int) Math.min(remaining,FileBlock.BLOCK_SIZE);
             ByteBuffer buffer = buffers.take();
@@ -103,6 +130,7 @@ public abstract class ReadFileCall implements Callable<Void> {
             deque.add(new FileBlock(true,
                     fileIndex, localDir.generateTransferPath(file.getPath(), remoteDir),
                     lastModified, length, i, buffer));
+            completedBytes.addAndGet(blkSize);
             remaining -= blkSize;
             i++;
         }

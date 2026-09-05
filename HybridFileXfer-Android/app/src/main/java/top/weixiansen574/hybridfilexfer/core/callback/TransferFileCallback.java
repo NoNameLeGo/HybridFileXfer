@@ -29,4 +29,22 @@ public interface TransferFileCallback {
     //传输通道有其中一个断开时
     void onIncomplete();
 
+    /**
+     * 传输开始（已协商完毕，即将开始读/写文件）。
+     *
+     * @param totalBytes 总传输字节数（不含文件夹，断点续传时仍为文件完整大小）
+     * @param totalFiles 总文件数（不含文件夹）
+     */
+    default void onTransferStarted(long totalBytes, int totalFiles) {
+    }
+
+    /**
+     * 总体传输进度（约每秒回调一次）。
+     *
+     * @param completedBytes 已完成字节数（含断点续传跳过的块）
+     * @param totalBytes     总传输字节数
+     */
+    default void onOverallProgress(long completedBytes, long totalBytes) {
+    }
+
 }

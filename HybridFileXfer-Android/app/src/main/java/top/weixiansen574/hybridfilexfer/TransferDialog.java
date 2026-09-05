@@ -8,6 +8,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import androidx.core.content.ContextCompat;
@@ -26,6 +27,9 @@ public class TransferDialog {
     private final Map<String, Holder> holderMap;
     private final Context context;
     private final View dialogView;
+    private ProgressBar progressBar;
+    private TextView txvProgress;
+    private TextView txvProgressDetail;
     private AlertDialog dialog;
 
 
@@ -34,6 +38,9 @@ public class TransferDialog {
         holderMap = new HashMap<>();
         LayoutInflater inflater = LayoutInflater.from(context);
         dialogView = View.inflate(context, R.layout.dialog_transfer, null);
+        progressBar = dialogView.findViewById(R.id.progress_bar);
+        txvProgress = dialogView.findViewById(R.id.txv_progress);
+        txvProgressDetail = dialogView.findViewById(R.id.txv_progress_detail);
         LinearLayout linearLayout = dialogView.findViewById(R.id.linearLayout);
         for (String channelName : channelNames) {
             View itemView = inflater.inflate(R.layout.item_net_interface_status, linearLayout, false);
@@ -68,6 +75,24 @@ public class TransferDialog {
         Objects.requireNonNull(holderMap.get(iName)).transferEvent.setText(event);
     }
 
+    /**
+     * 更新总体进度显示（已传字节/总字节 → 百分比）。
+     */
+    public void showProgress(long completedBytes, long totalBytes) {
+        int percent = totalBytes <= 0 ? 0 : (int) (completedBytes * 100 / totalBytes);
+        if (percent > 100) {
+            percent = 100;
+        }
+        progressBar.setProgress(percent);
+        txvProgress.setText(percent + "%");
+        if (totalBytes <= 0) {
+            txvProgressDetail.setText("");
+        } else {
+            txvProgressDetail.setText(String.format(Locale.getDefault(), "%s / %s",
+                    Utils.formatFileSize(completedBytes), Utils.formatFileSize(totalBytes)));
+        }
+    }
+
     public void showSpeeds(List<TrafficInfo> trafficInfoList) {
         long totalUploadSpeed = 0;
         long totalDownloadSpeed = 0;
@@ -91,6 +116,8 @@ public class TransferDialog {
 
     public void complete(boolean isUpload, long traffic, long time) {
         setCloseBtnEnable(true);
+        progressBar.setProgress(100);
+        txvProgress.setText("100%");
         dialog.setTitle((isUpload ? "▲" : "▼") + Utils.formatSpeed(traffic / time * 1000) +
                 "·" + Utils.formatTime(time) + "·" + Utils.formatFileSize(traffic));
         for (Map.Entry<String, Holder> entry : holderMap.entrySet()) {

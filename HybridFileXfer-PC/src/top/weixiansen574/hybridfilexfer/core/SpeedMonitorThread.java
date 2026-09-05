@@ -11,10 +11,15 @@ public class SpeedMonitorThread extends Thread {
     private boolean isRun = true;
     private final List<TransferConnection> connections;
     private final TransferFileCallback callback;
+    private final long totalBytes;
+    private final ProgressSource progressSource;
 
-    public SpeedMonitorThread(List<TransferConnection> connections, TransferFileCallback callback) {
+    public SpeedMonitorThread(List<TransferConnection> connections, TransferFileCallback callback,
+                              long totalBytes, ProgressSource progressSource) {
         this.connections = connections;
         this.callback = callback;
+        this.totalBytes = totalBytes;
+        this.progressSource = progressSource;
     }
 
     @Override
@@ -31,6 +36,8 @@ public class SpeedMonitorThread extends Thread {
                 trafficInfoList.add(channel.resetCurrentTrafficInfo());
             }
             callback.onSpeedInfo(trafficInfoList);
+            //总体进度：每秒回调一次
+            callback.onOverallProgress(progressSource.getCompletedBytes(), totalBytes);
         }
     }
 

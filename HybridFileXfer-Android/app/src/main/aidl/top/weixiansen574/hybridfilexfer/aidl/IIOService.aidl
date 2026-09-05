@@ -17,5 +17,6 @@ interface IIOService {
     boolean mkdirs(String path) = 9;
     boolean isFile(String path) = 10;
     String getFileParent(String path) = 11;
+    long getFileSize(String path) = 14;
     void destroy() = 16777114;
 }

@@ -1,5 +1,7 @@
 package top.weixiansen574.hybridfilexfer.jdkcore;
 
+import top.weixiansen574.hybridfilexfer.core.CheckpointEntry;
+import top.weixiansen574.hybridfilexfer.core.CheckpointManager;
 import top.weixiansen574.hybridfilexfer.core.HFXClient;
 import top.weixiansen574.hybridfilexfer.core.ReadFileCall;
 import top.weixiansen574.hybridfilexfer.core.Utils;
@@ -10,6 +12,7 @@ import top.weixiansen574.hybridfilexfer.core.bean.RemoteFile;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.LinkedBlockingDeque;
 
 public class JdkHFXClient extends HFXClient {
@@ -61,12 +64,24 @@ public class JdkHFXClient extends HFXClient {
     }
 
     @Override
-    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount) {
-        return new JdkWriteFileCall(buffers,dequeCount);
+    protected CheckpointManager createCheckpointManager() {
+        return new JdkCheckpointManager();
     }
 
     @Override
-    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount) {
-        return new JdkReadFileCall(buffers,files,localDir,remoteDir,operateThreadCount);
+    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Integer> checkpoints) {
+        return new JdkWriteFileCall(buffers, dequeCount, checkpoints, getCheckpointManager(), peerId);
+    }
+
+    @Override
+    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints) {
+        return new JdkReadFileCall(buffers, files, localDir, remoteDir, operateThreadCount, checkpoints);
+    }
+
+    @Override
+    protected boolean isCheckpointValid(String transferPath, CheckpointEntry entry) {
+        File file = new File(transferPath);
+        long skipBytes = (long) entry.completedBlocks * top.weixiansen574.hybridfilexfer.core.FileBlock.BLOCK_SIZE;
+        return file.isFile() && file.length() >= skipBytes;
     }
 }

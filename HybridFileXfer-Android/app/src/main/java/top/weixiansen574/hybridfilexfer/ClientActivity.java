@@ -209,6 +209,23 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
                         path));
             }
 
+            @SuppressLint("SetTextI18n")
+            @Override
+            public void onTransferStarted(long totalBytes, int totalFiles) {
+                txvState.setText("0% · " + Utils.formatFileSize(totalBytes));
+            }
+
+            @SuppressLint("SetTextI18n")
+            @Override
+            public void onOverallProgress(long completedBytes, long totalBytes) {
+                int percent = totalBytes <= 0 ? 0 : (int) (completedBytes * 100 / totalBytes);
+                if (percent > 100) {
+                    percent = 100;
+                }
+                txvState.setText(percent + "% · " + Utils.formatFileSize(completedBytes)
+                        + " / " + Utils.formatFileSize(totalBytes));
+            }
+
             @Override
             public void onFileDownloading(String iName, String path, long targetSize, long totalSize) {
                 showEvent(iName, String.format("▼ [%s/%s] %s",

@@ -3,7 +3,9 @@ package top.weixiansen574.hybridfilexfer.core;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingDeque;
@@ -15,19 +17,70 @@ import top.weixiansen574.nio.DataByteChannel;
 
 public abstract class HFXService {
     public static final String CLIENT_HEADER = "HFXC";
-    public static final int VERSION_CODE = 300;
+    public static final int VERSION_CODE = 301;
     protected final LinkedBlockingDeque<ByteBuffer> buffers = new LinkedBlockingDeque<>();
     protected DataByteChannel ctChannel;
     protected List<TransferConnection> connections;
+    /** 对端标识：作为断点续传检查点的键（区分不同对端） */
+    protected String peerId;
+    private CheckpointManager checkpointManager;
+
+    protected synchronized CheckpointManager getCheckpointManager() {
+        if (checkpointManager == null) {
+            checkpointManager = createCheckpointManager();
+        }
+        return checkpointManager;
+    }
+
+    protected abstract CheckpointManager createCheckpointManager();
 
     protected boolean sendFiles(List<RemoteFile> fileList,Directory localDir, Directory remoteDir, TransferFileCallback callback) throws IOException {
-        ReadFileCall readFileCall = createReadFileCall(buffers, fileList, localDir, remoteDir, connections.size());
+        //0. 断点续传握手：请求接收方返回检查点（传输路径 → 已完成块数）
+        ctChannel.writeShort(ControllerIdentifiers.CHECKPOINT_REQUEST);
+        //发送文件列表（传输路径），供接收方匹配本地检查点
+        int dirFileCount = fileList.size();
+        ctChannel.writeInt(dirFileCount);
+        for (RemoteFile file : fileList) {
+            ctChannel.writeUTF(localDir.generateTransferPath(file.getPath(), remoteDir));
+            ctChannel.writeLong(file.getSize());
+            ctChannel.writeLong(file.lastModified());
+            ctChannel.writeBoolean(file.isDirectory());
+        }
+        Map<String, Integer> remoteCheckpoints = new HashMap<>();
+        int checkpointCount = ctChannel.readInt();
+        for (int i = 0; i < checkpointCount; i++) {
+            remoteCheckpoints.put(ctChannel.readUTF(), ctChannel.readInt());
+        }
+        //将接收方以传输路径为键的检查点，转换为以本地源路径为键
+        Map<String, Integer> checkpoints = new HashMap<>(remoteCheckpoints.size());
+        for (RemoteFile file : fileList) {
+            if (file.isDirectory()) {
+                continue;
+            }
+            Integer skipBlocks = remoteCheckpoints.get(localDir.generateTransferPath(file.getPath(), remoteDir));
+            if (skipBlocks != null) {
+                checkpoints.put(file.getPath(), skipBlocks);
+            }
+        }
+
+        //1. 计算总传输量并通知（用于总体进度显示）
+        long totalBytes = 0;
+        int totalFiles = 0;
+        for (RemoteFile file : fileList) {
+            if (!file.isDirectory()) {
+                totalBytes += file.getSize();
+                totalFiles++;
+            }
+        }
+        callback.onTransferStarted(totalBytes, totalFiles);
+
+        ReadFileCall readFileCall = createReadFileCall(buffers, fileList, localDir, remoteDir, connections.size(), checkpoints);
         FutureTask<Void> readFileTask = new FutureTask<>(readFileCall);
         Thread readThread = new Thread(readFileTask);
         readThread.setName("FileRead");
         readThread.start();
         //另开一个线程读取传输流量信息，1秒一次
-        SpeedMonitorThread speedMonitorThread = new SpeedMonitorThread(connections, callback);
+        SpeedMonitorThread speedMonitorThread = new SpeedMonitorThread(connections, callback, totalBytes, readFileCall);
         speedMonitorThread.setName("SpeedMonitor");
         speedMonitorThread.start();
         long startTime = System.currentTimeMillis();
@@ -90,10 +143,52 @@ public abstract class HFXService {
     }
 
     protected boolean receiveFiles(TransferFileCallback callback) throws IOException {
-        WriteFileCall writeFileCall = createWriteFileCall(buffers, connections.size());
+        //0. 断点续传握手：应答发送方的检查点请求
+        short req = ctChannel.readShort();
+        if (req != ControllerIdentifiers.CHECKPOINT_REQUEST) {
+            throw new IOException("protocol error: expected CHECKPOINT_REQUEST, got " + req);
+        }
+        int fileCount = ctChannel.readInt();
+        List<RemoteFile> fileList = new ArrayList<>(fileCount);
+        for (int i = 0; i < fileCount; i++) {
+            fileList.add(new RemoteFile(
+                    ctChannel.readUTF(),//name（传输路径的文件名，接收方不使用）
+                    ctChannel.readUTF(),//path（传输路径）
+                    ctChannel.readLong(),//lastModified
+                    ctChannel.readLong(),//size
+                    ctChannel.readBoolean()//isDirectory
+            ));
+        }
+        //按文件列表匹配本地检查点（peerId + totalSize + lastModified 校验）
+        Map<String, CheckpointEntry> entries = getCheckpointManager().loadCheckpoints(fileList, peerId);
+        Map<String, Integer> checkpoints = new HashMap<>(entries.size());
+        long totalBytes = 0;
+        int totalFiles = 0;
+        for (RemoteFile file : fileList) {
+            if (file.isDirectory()) {
+                continue;
+            }
+            totalBytes += file.getSize();
+            totalFiles++;
+            CheckpointEntry entry = entries.get(file.getPath());
+            //仅当目标文件在磁盘上依然有效（存在且长度 >= 检查点字节）时才启用续传；
+            //无效（被删除/截断）则不带该检查点，发送方会全量重传
+            if (entry != null && isCheckpointValid(file.getPath(), entry)) {
+                checkpoints.put(file.getPath(), entry.completedBlocks);
+            }
+        }
+        //写回检查点响应
+        ctChannel.writeInt(checkpoints.size());
+        for (Map.Entry<String, Integer> e : checkpoints.entrySet()) {
+            ctChannel.writeUTF(e.getKey());
+            ctChannel.writeInt(e.getValue());
+        }
+        callback.onTransferStarted(totalBytes, totalFiles);
+
+        WriteFileCall writeFileCall = createWriteFileCall(buffers, connections.size(), checkpoints);
         long startTime = System.currentTimeMillis();
 
-        SpeedMonitorThread speedMonitorThread = new SpeedMonitorThread(connections, callback);
+        SpeedMonitorThread speedMonitorThread = new SpeedMonitorThread(connections, callback, totalBytes, writeFileCall);
         speedMonitorThread.setName("SpeedMonitor");
         speedMonitorThread.start();
 
@@ -147,8 +242,17 @@ public abstract class HFXService {
         return true;
     }
 
-    protected abstract WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount);
+    protected abstract WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Integer> checkpoints);
 
-    protected abstract ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount);
+    protected abstract ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints);
+
+    /**
+     * 平台层磁盘校验：检查点对应的目标文件是否依然有效（存在且长度不小于已完成字节数）。
+     * <p>返回 false 时该检查点不会返回给发送方，从而实现全量重传，避免空洞文件。</p>
+     *
+     * @param transferPath 接收方传输路径
+     * @param entry        检查点条目
+     */
+    protected abstract boolean isCheckpointValid(String transferPath, CheckpointEntry entry);
 
 }

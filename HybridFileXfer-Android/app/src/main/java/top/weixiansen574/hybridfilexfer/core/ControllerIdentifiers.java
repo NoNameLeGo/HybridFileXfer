@@ -7,6 +7,8 @@ public class ControllerIdentifiers {
     public static final short MKDIR = 3;
     public static final short REQUEST_RECEIVE = 10;
     public static final short REQUEST_SEND = 11;
+    /** 断点续传：发送方请求接收方返回检查点（后随文件列表，接收方以 CHECKPOINT_RESPONSE_HEADER 应答） */
+    public static final short CHECKPOINT_REQUEST = 14;
 
     //就让魔法打败魔法吧！
     /**

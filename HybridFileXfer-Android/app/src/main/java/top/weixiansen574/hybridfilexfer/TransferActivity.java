@@ -351,6 +351,16 @@ public class TransferActivity extends AppCompatActivity {
         }
 
         @Override
+        public void onTransferStarted(long totalBytes, int totalFiles) {
+            transferDialog.showProgress(0, totalBytes);
+        }
+
+        @Override
+        public void onOverallProgress(long completedBytes, long totalBytes) {
+            transferDialog.showProgress(completedBytes, totalBytes);
+        }
+
+        @Override
         public void onFileDownloading(String iName, String path, long targetSize, long totalSize) {
             transferDialog.showEvent(iName, String.format("▼ [%s/%s] %s",
                     Utils.formatFileSize(targetSize),

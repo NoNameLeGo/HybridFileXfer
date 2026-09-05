@@ -2,13 +2,17 @@ package top.weixiansen574.hybridfilexfer.droidcore;
 
 import android.app.ActivityManager;
 import android.content.Context;
+import android.os.RemoteException;
 
 import java.nio.ByteBuffer;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.LinkedBlockingDeque;
 
 import top.weixiansen574.hybridfilexfer.NativeMemory;
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
+import top.weixiansen574.hybridfilexfer.core.CheckpointEntry;
+import top.weixiansen574.hybridfilexfer.core.CheckpointManager;
 import top.weixiansen574.hybridfilexfer.core.HFXClient;
 import top.weixiansen574.hybridfilexfer.core.ReadFileCall;
 import top.weixiansen574.hybridfilexfer.core.WriteFileCall;
@@ -61,13 +65,28 @@ public class DroidHFXClient extends HFXClient {
     }
 
     @Override
-    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount) {
-        return new DroidWriteFileCall(buffers,dequeCount,iioService);
+    protected CheckpointManager createCheckpointManager() {
+        return new AndroidCheckpointManager(context);
     }
 
     @Override
-    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount) {
-        return new DroidReadFileCall(iioService,buffers,files,localDir,remoteDir,operateThreadCount);
+    protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Integer> checkpoints) {
+        return new DroidWriteFileCall(buffers, dequeCount, iioService, checkpoints, getCheckpointManager(), peerId);
+    }
+
+    @Override
+    protected ReadFileCall createReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Integer> checkpoints) {
+        return new DroidReadFileCall(iioService, buffers, files, localDir, remoteDir, operateThreadCount, checkpoints);
+    }
+
+    @Override
+    protected boolean isCheckpointValid(String transferPath, CheckpointEntry entry) {
+        try {
+            long skipBytes = (long) entry.completedBlocks * top.weixiansen574.hybridfilexfer.core.FileBlock.BLOCK_SIZE;
+            return iioService.isFile(transferPath) && iioService.getFileSize(transferPath) >= skipBytes;
+        } catch (RemoteException e) {
+            return false;
+        }
     }
 
     public void freeBuffers(){

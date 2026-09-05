@@ -99,6 +99,22 @@ public class Main {
         }
 
         @Override
+        public void onTransferStarted(long totalBytes, int totalFiles) {
+            Strings.printf("transfer_started", Utils.formatFileSize(totalBytes), totalFiles);
+        }
+
+        @Override
+        public void onOverallProgress(long completedBytes, long totalBytes) {
+            int percent = totalBytes <= 0 ? 0 : (int) (completedBytes * 100 / totalBytes);
+            if (percent > 100) {
+                percent = 100;
+            }
+            //\r 覆盖同一行，实现单行进度刷新
+            System.out.printf("\r进度: %d%% (%s / %s)   ", percent,
+                    Utils.formatFileSize(completedBytes), Utils.formatFileSize(totalBytes));
+        }
+
+        @Override
         public void onChannelComplete(String iName, long traffic, long time) {
             Strings.printf("channel_complete", iName, time == 0 ? "∞" : Utils.formatSpeed(traffic / time * 1000));
         }

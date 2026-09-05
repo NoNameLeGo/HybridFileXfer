@@ -179,7 +179,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
     @Override
     public void onServiceConnected(ComponentName name, IBinder service) {
         IIOService iioService = IIOService.Stub.asInterface(service);
-        server = new HFXServer(iioService);
+        server = new HFXServer(iioService, context);
         StartServerCallback callback = new StartServerCallback() {
             @Override
             public void onBindFailed(int port) {
