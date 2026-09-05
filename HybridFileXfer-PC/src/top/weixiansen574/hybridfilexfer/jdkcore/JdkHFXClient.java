@@ -10,6 +10,8 @@ import top.weixiansen574.hybridfilexfer.core.bean.Directory;
 import top.weixiansen574.hybridfilexfer.core.bean.RemoteFile;
 
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
@@ -82,5 +84,14 @@ public class JdkHFXClient extends HFXClient {
     protected boolean isCheckpointValid(String transferPath, CheckpointEntry entry) {
         File file = new File(transferPath);
         return file.isFile() && file.length() >= entry.completedBytes;
+    }
+
+    @Override
+    protected String computeFileMd5(String localPath) throws Exception {
+        try (FileInputStream fis = new FileInputStream(localPath)) {
+            return Utils.md5Hex(fis);
+        } catch (IOException e) {
+            return null;
+        }
     }
 }

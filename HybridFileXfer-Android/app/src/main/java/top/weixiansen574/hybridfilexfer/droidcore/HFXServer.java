@@ -1,8 +1,10 @@
 package top.weixiansen574.hybridfilexfer.droidcore;
 
 import android.content.Context;
+import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
@@ -29,6 +31,7 @@ import top.weixiansen574.hybridfilexfer.core.ReceiveFileCall;
 import top.weixiansen574.hybridfilexfer.core.SendFileCall;
 import top.weixiansen574.hybridfilexfer.core.SpeedMonitorThread;
 import top.weixiansen574.hybridfilexfer.core.TransferConnection;
+import top.weixiansen574.hybridfilexfer.core.Utils;
 import top.weixiansen574.hybridfilexfer.core.WriteFileCall;
 import top.weixiansen574.hybridfilexfer.core.bean.Directory;
 import top.weixiansen574.hybridfilexfer.core.bean.RemoteFile;
@@ -336,6 +339,19 @@ public class HFXServer extends HFXService {
             return ioService.isFile(transferPath) && ioService.getFileSize(transferPath) >= entry.completedBytes;
         } catch (RemoteException e) {
             return false;
+        }
+    }
+
+    @Override
+    protected String computeFileMd5(String localPath) throws Exception {
+        ParcelFileDescriptor pfd = ioService.openReadableFile(localPath);
+        if (pfd == null) {
+            return null;
+        }
+        try (FileInputStream fis = new FileInputStream(pfd.getFileDescriptor())) {
+            return Utils.md5Hex(fis);
+        } finally {
+            pfd.close();
         }
     }
 }

@@ -203,13 +203,13 @@ jar cvf HybridFileXfer.jar -C out .
 |------|------|------|
 | P0 | CheckpointManager + 数据层（SQLite / JSON） | ✅ 已完成（Android CheckpointEntry 存 ConfigDB transfer_checkpoint 表 / PC JdkCheckpointManager 存 JSON Lines，7 天自动清理） |
 | P1 | ControllerIdentifiers 新增常量 + checkpoint 协议读写 | ✅ 已完成（CHECKPOINT_REQUEST=14；握手中交换文件列表 + 检查点；VERSION_CODE 升至 301） |
-| P2 | WriteFileCall：续写 + checkpoint + md5 + 写入验证 | ◑ 部分完成（续写 + 每块存档 + 完成即清除 + 磁盘校验兜底；md5 累积与写入验证未做） |
-| P3 | ReadFileCall：跳过已传块 + md5 累积 | ◑ 部分完成（跳过已传块；md5 未做） |
+| P2 | WriteFileCall：续写 + checkpoint + md5 + 写入验证 | ◑ 部分完成（续写 + 每块存档 + 完成即清除 + 磁盘校验兜底；md5 采用传输后可选校验方案，写入验证未做） |
+| P3 | ReadFileCall：跳过已传块 + md5 累积 | ◑ 部分完成（跳过已传块；不做传输中 md5 累积，改为传输完成后可选全量校验） |
 | P4 | FileSanitizer：文件名非法字符清洗 | ⬜ 待开始（Directory.generateTransferPath 已有基础替换） |
-| P5 | HFXService：checkpoint + checksum 握手集成 | ◑ 部分完成（checkpoint 握手 + 磁盘有效性校验；checksum 握手未做） |
+| P5 | HFXService：checkpoint + checksum 握手集成 | ◑ 部分完成（checkpoint 握手 + 磁盘有效性校验；MD5 校验以"传输完成后可选"形式实现：FILE_CHECKSUM_REQUEST=16，服务端发起、客户端主循环响应，双方各算本地副本 MD5 对比） |
 | P6 | IIOService.aidl + IOServiceImpl | ◑ 部分完成（新增 getFileSize=14 + 打开文件不再截断；createAndOpenWriteableFile 带 skipBlocks 未做） |
 | P7 | HFXClient / HFXServer peerId 传递 | ✅ 已完成（客户端=服务器地址，服务端=控制通道对端 IP） |
-| P8 | TransferFileCallback 新增回调 + TransferDialog 进度条 | ✅ 已完成（onTransferStarted / onOverallProgress 默认回调 + 进度条 UI） |
+| P8 | TransferFileCallback 新增回调 + TransferDialog 进度条 | ✅ 已完成（onTransferStarted / onOverallProgress 进度回调 + onFileChecksumComplete 校验回调 + 进度条 UI + "MD5 校验"按钮） |
 | P9 | Main / ClientActivity / TransferActivity UI 集成 | ✅ 已完成（PC 单行进度刷新；Android TransferDialog 与 ClientActivity 显示百分比/字节） |
 | P10 | 日志框架 + 异常处理统一 | ⬜ 待开始 |
 | P11 | 暂停/取消 + 跳过重复文件 + 传输历史 | ⬜ 待开始 |

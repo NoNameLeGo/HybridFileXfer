@@ -141,6 +141,17 @@ public class TransferDialog {
         button.setOnClickListener(onClickListener);
     }
 
+    /**
+     * 将对话框按钮切换为"MD5 校验"（传输完成后的可选项）。
+     * 点击后由调用方执行校验；校验完成后应再调用 {@link #setButton} 恢复为"完成"。
+     */
+    public void enableVerify(View.OnClickListener onClickListener) {
+        Button button = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+        button.setText("MD5 校验");
+        button.setEnabled(true);
+        button.setOnClickListener(onClickListener);
+    }
+
     public void dismiss() {
         dialog.dismiss();
     }

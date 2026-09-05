@@ -1,6 +1,10 @@
 package top.weixiansen574.hybridfilexfer.core;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -101,6 +105,32 @@ public class Utils {
             remoteFiles.add(new RemoteFile(file));
         }
         return remoteFiles;
+    }
+
+    /**
+     * 计算输入流的 MD5（小写十六进制）。流由调用方负责关闭。
+     * 用于传输完成后的可选文件校验。
+     *
+     * @return 32 位小写十六进制 md5；计算失败时返回 null
+     */
+    public static String md5Hex(InputStream in) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("MD5");
+            byte[] buffer = new byte[1024 * 1024];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                digest.update(buffer, 0, read);
+            }
+            byte[] bytes = digest.digest();
+            StringBuilder sb = new StringBuilder(bytes.length * 2);
+            for (byte b : bytes) {
+                sb.append(Character.forDigit((b >> 4) & 0xF, 16));
+                sb.append(Character.forDigit(b & 0xF, 16));
+            }
+            return sb.toString();
+        } catch (IOException | NoSuchAlgorithmException e) {
+            return null;
+        }
     }
 
 }

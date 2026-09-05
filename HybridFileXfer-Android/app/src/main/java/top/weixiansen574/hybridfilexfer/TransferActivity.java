@@ -40,6 +40,7 @@ import top.weixiansen574.hybridfilexfer.listadapter.RemoteFileSelectAdapter;
 import top.weixiansen574.hybridfilexfer.tasks.BTransferFileCallback;
 import top.weixiansen574.hybridfilexfer.tasks.SendFilesToRemoteTask;
 import top.weixiansen574.hybridfilexfer.tasks.SendFilesToShelfTask;
+import top.weixiansen574.hybridfilexfer.tasks.VerifyChecksumTask;
 
 public class TransferActivity extends AppCompatActivity {
     private boolean isLeftFocus = true;
@@ -424,7 +425,35 @@ public class TransferActivity extends AppCompatActivity {
         public void onComplete(boolean isUpload, long traffic, long time) {
             //文件传输完成，平均总速度：
             transferDialog.complete(isUpload, traffic, time);
+            //传输完成后的可选项：MD5 文件校验
+            transferDialog.enableVerify(v -> verify());
             adapter.refresh();
+        }
+
+        /** 用户点击"MD5 校验"：后台执行校验（由手机服务端发起） */
+        private void verify() {
+            HFXServer server = HFXServer.instance;
+            if (server == null) {
+                return;
+            }
+            transferDialog.setTitle("正在校验文件…");
+            transferDialog.setButton("校验中…", null);
+            new VerifyChecksumTask(this, server).execute();
+        }
+
+        @Override
+        public void onFileChecksumComplete(boolean passed, int mismatchCount) {
+            if (passed) {
+                transferDialog.setTitle("MD5 校验通过 ✓");
+            } else {
+                transferDialog.setTitle("MD5 校验失败：" + mismatchCount + " 个文件 ✗");
+                new AlertDialog.Builder(context)
+                        .setTitle("MD5 校验失败")
+                        .setMessage(mismatchCount + " 个文件校验失败（内容不一致或文件缺失），建议重新传输。")
+                        .setPositiveButton(R.string.ok, null)
+                        .show();
+            }
+            transferDialog.setButton(context.getString(R.string.complete), null);
         }
 
         @Override

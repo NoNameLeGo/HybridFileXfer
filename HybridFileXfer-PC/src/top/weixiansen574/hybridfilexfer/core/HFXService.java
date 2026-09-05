@@ -23,6 +23,12 @@ public abstract class HFXService {
     protected List<TransferConnection> connections;
     /** 对端标识：作为断点续传检查点的键（区分不同对端） */
     protected String peerId;
+    /** 最近一次传输中本方是否为接收方（落盘方）。用于传输完成后可选校验的路径解析 */
+    protected boolean receiverSide = false;
+    /** 发送方角色：传输路径 → 本地源路径（最近一次 sendFiles 记录） */
+    protected final Map<String, String> transferToSource = new HashMap<>();
+    /** 接收方角色：最近一次 receiveFiles 收到的传输路径列表（落盘路径） */
+    protected final List<String> receivedTransferPaths = new ArrayList<>();
     private CheckpointManager checkpointManager;
 
     protected synchronized CheckpointManager getCheckpointManager() {
@@ -35,6 +41,14 @@ public abstract class HFXService {
     protected abstract CheckpointManager createCheckpointManager();
 
     protected boolean sendFiles(List<RemoteFile> fileList,Directory localDir, Directory remoteDir, TransferFileCallback callback) throws IOException {
+        //记录传输角色与路径映射（传输路径 → 本地源路径），供传输完成后的可选校验使用
+        receiverSide = false;
+        transferToSource.clear();
+        for (RemoteFile file : fileList) {
+            if (!file.isDirectory()) {
+                transferToSource.put(localDir.generateTransferPath(file.getPath(), remoteDir), file.getPath());
+            }
+        }
         //0. 断点续传握手：请求接收方返回检查点（传输路径 → 已确认完成的字节偏移）
         ctChannel.writeShort(ControllerIdentifiers.CHECKPOINT_REQUEST);
         //发送文件列表（传输路径），供接收方匹配本地检查点
@@ -159,6 +173,14 @@ public abstract class HFXService {
                     ctChannel.readBoolean()//isDirectory
             ));
         }
+        //记录传输角色与落盘路径（校验时按传输路径直接读取本地文件）
+        receiverSide = true;
+        receivedTransferPaths.clear();
+        for (RemoteFile file : fileList) {
+            if (!file.isDirectory()) {
+                receivedTransferPaths.add(file.getPath());
+            }
+        }
         //按文件列表匹配本地检查点（peerId + totalSize + lastModified 校验）
         Map<String, CheckpointEntry> entries = getCheckpointManager().loadCheckpoints(fileList, peerId);
         Map<String, Long> checkpoints = new HashMap<>(entries.size());
@@ -254,5 +276,84 @@ public abstract class HFXService {
      * @param entry        检查点条目
      */
     protected abstract boolean isCheckpointValid(String transferPath, CheckpointEntry entry);
+
+    /**
+     * 平台层：计算本地文件的 MD5（小写十六进制）。
+     * <p>用于传输完成后的可选文件校验。文件不存在或计算失败时返回 null。</p>
+     *
+     * @param localPath 本地文件路径
+     */
+    protected abstract String computeFileMd5(String localPath) throws Exception;
+
+    /**
+     * 根据本地角色，将传输路径解析为本机实际文件路径：
+     * 接收方（receiverSide）落盘路径即传输路径；发送方通过 transferToSource 映射回源路径。
+     */
+    protected String resolveLocalPath(String transferPath) {
+        return receiverSide ? transferPath : transferToSource.get(transferPath);
+    }
+
+    /**
+     * 计算与传输路径对应的本机文件 MD5；本地缺失/计算失败返回 null。
+     */
+    protected String localMd5(String transferPath) {
+        String localPath = resolveLocalPath(transferPath);
+        if (localPath == null) {
+            return null;
+        }
+        try {
+            return computeFileMd5(localPath);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 传输完成后的可选文件校验：对最近一次传输的文件，
+     * 请求对方计算其本地副本的 MD5，与本机副本对比，结果通过回调返回。
+     * <p>本机计算失败/缺失计为校验失败；文件内容不一致也计为失败。</p>
+     * <p>注意：仅服务端（HFXServer）可发起（客户端主循环负责响应本请求）。</p>
+     */
+    public void verifyFiles(TransferFileCallback callback) throws IOException {
+        List<String> transferPaths = new ArrayList<>(receiverSide ? receivedTransferPaths : transferToSource.keySet());
+        if (transferPaths.isEmpty()) {
+            callback.onFileChecksumComplete(true, 0);
+            return;
+        }
+        ctChannel.writeShort(ControllerIdentifiers.FILE_CHECKSUM_REQUEST);
+        ctChannel.writeInt(transferPaths.size());
+        for (String transferPath : transferPaths) {
+            ctChannel.writeUTF(transferPath);
+        }
+        int count = ctChannel.readInt();
+        Map<String, String> remoteMd5s = new HashMap<>(count);
+        for (int i = 0; i < count; i++) {
+            remoteMd5s.put(ctChannel.readUTF(), ctChannel.readUTF());
+        }
+        int mismatchCount = 0;
+        for (String transferPath : transferPaths) {
+            String local = localMd5(transferPath);
+            String remote = remoteMd5s.get(transferPath);
+            if (local == null || remote == null || !local.equals(remote)) {
+                mismatchCount++;
+            }
+        }
+        callback.onFileChecksumComplete(mismatchCount == 0, mismatchCount);
+    }
+
+    /**
+     * 应答对方的文件校验请求：按请求中的传输路径清单计算本机 MD5 并回传。
+     * <p>由客户端主循环（HFXClient.start）在处理到 FILE_CHECKSUM_REQUEST 时调用。</p>
+     */
+    protected void handleFileChecksumRequest() throws IOException {
+        int count = ctChannel.readInt();
+        ctChannel.writeInt(count);
+        for (int i = 0; i < count; i++) {
+            String transferPath = ctChannel.readUTF();
+            String md5 = localMd5(transferPath);
+            ctChannel.writeUTF(transferPath);
+            ctChannel.writeUTF(md5 == null ? "" : md5);
+        }
+    }
 
 }

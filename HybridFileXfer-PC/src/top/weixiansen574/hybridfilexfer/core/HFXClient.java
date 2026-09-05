@@ -172,6 +172,10 @@ public abstract class HFXClient extends HFXService {
                 case ControllerIdentifiers.REQUEST_SEND:
                     handleSendFiles();
                     break;
+                case ControllerIdentifiers.FILE_CHECKSUM_REQUEST:
+                    //传输完成后的可选 MD5 校验：计算本机副本并回传
+                    handleFileChecksumRequest();
+                    break;
                 case ControllerIdentifiers.SHUTDOWN:
                     handleShutdown();
                     break;

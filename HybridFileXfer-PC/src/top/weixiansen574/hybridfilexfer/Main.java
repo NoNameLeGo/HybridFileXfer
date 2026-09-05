@@ -154,6 +154,8 @@ public class Main {
             } else {
                 Strings.printf("download_complete", Utils.formatSpeed(traffic / time * 1000), Utils.formatTime(time), Utils.formatFileSize(traffic));
             }
+            //传输完成后的可选项：MD5 文件校验由手机端（服务端）发起
+            System.out.println("如需校验文件完整性，请在手机端传输界面点击“MD5 校验”。");
         }
 
         @Override
