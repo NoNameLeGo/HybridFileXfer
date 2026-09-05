@@ -1,12 +1,18 @@
 # 发布流水线：打 tag v* 或手动触发 workflow_dispatch 时，
-# 构建 Android APK + PC 端（Windows 免安装包 / Linux jar）并发布到 GitHub Release。
+# 构建 Android APK（含 antutu-turbo 变体）与 PC 端包，发布到 GitHub Release。
+# 产物结构与父仓库 (weixiansen574/HybridFileXfer) 对齐：
+#   app-release.apk / app-release_antutu-turbo.apk / HybridFileXfer-PC.zip
 #
-# 可选：为 Android release APK 签名，在仓库 Settings → Secrets and variables → Actions 配置：
-#   ANDROID_KEYSTORE_BASE64     —— keystore 文件的 base64（base64 -w0 keystore.jks）
+# Android 发布签名（必需，fork 各版本间可无缝覆盖安装）：
+# 在仓库 Settings → Secrets and variables → Actions 配置以下 4 个 secret：
+#   ANDROID_KEYSTORE_BASE64     —— keystore 文件的 base64（生成后妥善保管，丢失则旧版本无法升级安装）
 #   ANDROID_KEYSTORE_PASSWORD   —— keystore 密码
 #   ANDROID_KEY_ALIAS           —— 密钥别名
 #   ANDROID_KEY_PASSWORD        —— 密钥密码
-# 未配置时 release APK 以未签名形式发布（文件名带 -unsigned 后缀）。
+# 生成方法（本机 JDK 自带 keytool，无需安装构建环境）：
+#   keytool -genkeypair -v -keystore release.jks -alias <alias> -keyalg RSA -keysize 4096 \
+#     -validity 10000 -storepass <pass> -keypass <pass> -dname "CN=..., O=..., C=CN"
+#   base64 -w0 release.jks   （Linux/macOS）或 PowerShell: [Convert]::ToBase64String([IO.File]::ReadAllBytes("release.jks"))
 name: 'Release'
 
 on:
@@ -29,7 +35,7 @@ env:
 
 jobs:
   android:
-    name: 'Android APK'
+    name: 'Android APK (release + antutu-turbo)'
     runs-on: ubuntu-latest
     steps:
       - name: 'Checkout'
@@ -63,23 +69,7 @@ jobs:
           VER="${VER#v}"
           sed -i "s/versionName \".*\"/versionName \"${VER}\"/" app/build.gradle
 
-      - name: 'Build APKs'
-        working-directory: HybridFileXfer-Android
-        run: |
-          sudo chmod -R 0755 .
-          ./gradlew --no-daemon assembleRelease assembleDebug
-
-      - name: 'Collect APKs'
-        shell: bash
-        working-directory: HybridFileXfer-Android
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/dist"
-          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/dist/HybridFileXfer-android-${{ env.RELEASE_TAG }}-debug.apk"
-          cp app/build/outputs/apk/release/app-release-unsigned.apk "$GITHUB_WORKSPACE/dist/HybridFileXfer-android-${{ env.RELEASE_TAG }}-unsigned.apk"
-          echo "collected:"
-          ls -lh "$GITHUB_WORKSPACE/dist"
-
-      - name: 'Sign release APK (if secrets configured)'
+      - name: 'Build & sign APKs'
         shell: bash
         working-directory: HybridFileXfer-Android
         env:
@@ -88,20 +78,40 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
+          sudo chmod -R 0755 .
           if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
-            echo "未配置签名 secrets（ANDROID_KEYSTORE_BASE64 等），跳过签名，发布 unsigned APK"
-            exit 0
+            echo "::error::未配置 Android 发布签名 secrets（ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD）。"
+            echo "::error::生成方法见 .github/workflows/release.yml 顶部注释，配置后重试。"
+            exit 1
           fi
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > keystore.jks
           trap 'rm -f keystore.jks' EXIT
-          "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign \
+          APKSIGNER="$ANDROID_HOME/build-tools/34.0.0/apksigner"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+
+          # 1) 正式版（原包名）
+          ./gradlew --no-daemon assembleRelease
+          "$APKSIGNER" sign \
             --ks keystore.jks \
             --ks-pass "pass:${ANDROID_KEYSTORE_PASSWORD}" \
             --key-pass "pass:${ANDROID_KEY_PASSWORD}" \
             --ks-key-alias "${ANDROID_KEY_ALIAS}" \
-            --out "$GITHUB_WORKSPACE/dist/HybridFileXfer-android-${{ env.RELEASE_TAG }}-release.apk" \
+            --out "$GITHUB_WORKSPACE/dist/app-release.apk" \
             app/build/outputs/apk/release/app-release-unsigned.apk
-          echo "signed:"
+
+          # 2) antutu-turbo 变体（applicationId 改为 com.antutu.ABenchMark 的神秘加成😆），clean 后干净重建
+          sed -i 's|applicationId "top.weixiansen574.hybridfilexfer"|applicationId "com.antutu.ABenchMark"|' app/build.gradle
+          ./gradlew --no-daemon clean assembleRelease
+          "$APKSIGNER" sign \
+            --ks keystore.jks \
+            --ks-pass "pass:${ANDROID_KEYSTORE_PASSWORD}" \
+            --key-pass "pass:${ANDROID_KEY_PASSWORD}" \
+            --ks-key-alias "${ANDROID_KEY_ALIAS}" \
+            --out "$GITHUB_WORKSPACE/dist/app-release_antutu-turbo.apk" \
+            app/build/outputs/apk/release/app-release-unsigned.apk
+
+          echo "signed apks:"
           ls -lh "$GITHUB_WORKSPACE/dist"
 
       - name: 'Upload dist artifacts'
@@ -112,7 +122,7 @@ jobs:
           if-no-files-found: error
 
   pc-windows:
-    name: 'PC Windows (jar + adb + launcher)'
+    name: 'PC Windows (HybridFileXfer-PC.zip)'
     runs-on: windows-latest
     steps:
       - name: 'Checkout'
@@ -143,29 +153,27 @@ jobs:
         with:
           dotnet-version: '9.x'
 
-      - name: 'Build Launcher (NativeAOT)'
+      - name: 'Build start.exe (NativeAOT launcher)'
         shell: bash
         run: |
           dotnet publish HybridFileXferLauncher/HybridFileXferLauncher.csproj \
             -c Release -r win-x64 -o launcher-out -p:PublishAot=true
 
-      - name: 'Package Windows zip'
+      - name: 'Package HybridFileXfer-PC.zip'
         shell: bash
         working-directory: HybridFileXfer-PC
         run: |
           set -euo pipefail
-          VERSION="${{ env.RELEASE_TAG }}"
-          PACK="HybridFileXfer-${VERSION}-windows-x64"
+          PACK="HybridFileXfer-PC"
           mkdir -p "$GITHUB_WORKSPACE/dist/${PACK}"
           cp HybridFileXfer.jar "$GITHUB_WORKSPACE/dist/${PACK}/"
           cp adb.exe AdbWinApi.dll AdbWinUsbApi.dll "$GITHUB_WORKSPACE/dist/${PACK}/"
-          cp "$GITHUB_WORKSPACE/script/"*.bat "$GITHUB_WORKSPACE/dist/${PACK}/"
-          cp "$GITHUB_WORKSPACE/launcher-out/HybridFileXferLauncher.exe" "$GITHUB_WORKSPACE/dist/${PACK}/"
+          cp "$GITHUB_WORKSPACE/script/"*.bat "$GITHUB_WORKSPACE/script/"*.sh "$GITHUB_WORKSPACE/dist/${PACK}/"
+          cp "$GITHUB_WORKSPACE/launcher-out/HybridFileXferLauncher.exe" "$GITHUB_WORKSPACE/dist/${PACK}/start.exe"
           cd "$GITHUB_WORKSPACE/dist"
-          # Windows 上 zip 命令为 tar 的兼容模式，直接用它打 zip
-          tar -a -c -f "${PACK}.zip" "${PACK}"
+          tar -a -c -f "HybridFileXfer-PC.zip" "${PACK}"
           rm -rf "${PACK}"
-          ls -lh *.zip
+          ls -lh HybridFileXfer-PC.zip
 
       - name: 'Upload dist artifacts'
         uses: actions/upload-artifact@v4
@@ -199,7 +207,7 @@ jobs:
           cp src/messages_*.properties out/pc/
           jar cf HybridFileXfer.jar -C out/pc .
 
-      - name: 'Package Linux zip'
+      - name: 'Package Linux tar.gz'
         run: |
           set -euo pipefail
           VERSION="${{ env.RELEASE_TAG }}"
@@ -234,7 +242,6 @@ jobs:
       - name: 'Flatten artifacts'
         run: |
           find dist -type f | sort
-          # 把各 artifact 子目录中的文件平铺到 dist 根
           find dist -mindepth 2 -type f -exec mv -n {} dist/ \;
 
       - name: 'Create Release'
@@ -244,11 +251,12 @@ jobs:
           name: 'HybridFileXfer ${{ env.RELEASE_TAG }}'
           body: |
             ## 下载
-            - Android APK（debug / unsigned 或已签名 release）
-            - PC Windows 免安装包（含 adb 与启动器）
-            - PC Linux 包（jar，需自备 adb）
+            - `app-release.apk` — Android 正式版（稳定签名，可覆盖安装本 fork 的历史版本）
+            - `app-release_antutu-turbo.apk` — Android 变体（不同包名，可与正式版共存）
+            - `HybridFileXfer-PC.zip` — PC 端免安装包（jar + adb + 启动器 start.exe + 启动脚本）
+            - `HybridFileXfer-<版本>-linux.tar.gz` — PC Linux 包（jar，需自备对应架构 adb）
 
-            > Android release APK 未配置签名 secrets 时以 `-unsigned` 后缀发布，安装前请自行校验。
+            > 说明：本 fork 使用独立发布签名，与父仓库 (weixiansen574) 版本互不覆盖，切换时需先卸载。
           files: |
             dist/**/*.apk
             dist/**/*.zip
