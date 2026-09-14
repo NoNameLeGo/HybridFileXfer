@@ -21,11 +21,14 @@
 
 | 项 | 方式 |
 |----|------|
-| PC 全量编译、Android `core/` 单独编译、`core/` 双端逐字节一致 | javac + `diff -r` |
-| 水位线、truncate、空文件、文件名清洗/去重、看门狗超时 | `HybridFileXfer-PC/test/WatermarkProbe.java` 6/6 通过；断言有效性的反证也做过 |
+| PC 全量编译 + jar 冒烟（`java -jar -v`） | 本地 javac，且已由 `build.yml` 的 `pc` 任务在每次 push 上自动复查 |
+| `core/` 与 `nio/` 双端逐字节一致 | `diff -r`；同样已进 `build.yml` 的 `pc` 任务 |
+| Android `core/` 单独编译 | javac（免 SDK） |
+| 水位线、truncate、空文件、文件名清洗/去重、看门狗超时 | `HybridFileXfer-PC/test/WatermarkProbe.java` 6/6 通过；断言有效性的反证也做过；已进 `pc` 任务 |
 | `-x/--checksum` 参数解析与帮助文案 | `java -cp ... Main --checksum -h` |
 | `SO_TIMEOUT` 对 NIO 阻塞读无效、`close()` 可解除阻塞 | 两个独立探针实测 |
 | 握手字段对称性、协议版本门 | 人工核对（无自动化手段） |
+| Android 完整构建（含 `droidcore/`、CMake、R8、lintVital） | `build.yml` 的 `build` 任务，本次已通过 |
 
 **未验证（接手第一件事）**：
 

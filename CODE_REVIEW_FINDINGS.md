@@ -304,8 +304,9 @@ Android 侧泄漏跨进程 `ParcelFileDescriptor`，且最后一段被节流的�
   场景5 文件名清洗 11 项断言 + 去重 3 项断言（Windows / Linux 分开断言）
   场景6 看门狗：卡死时读线程 500ms 内解除阻塞且通道已关闭；持续 touch 时不误杀
 反证：把其中一项预期改错后自检退出码 1 并打印 FAIL → 断言确实有效
-PC 全量 javac 退出码 0；Android core 单独 javac 退出码 0（仅类型检查：不装 SDK、不跑 Gradle、不产 APK）；core/ 双端 diff 一致
-Android 完整构建（含 droidcore）由 push 触发的 GitHub Actions `build.yml` 验证，本次已通过（2m48s）
+PC 全量 javac 退出码 0；Android core 单独 javac 退出码 0（仅类型检查：不装 SDK、不跑 Gradle、不产 APK）；core/ 与 nio/ 双端 diff 一致
+Android 完整构建（含 droidcore）由 push 触发的 GitHub Actions `build.yml` 的 `build` 任务验证，本次已通过（2m48s）
+PC 端的编译 + jar 冒烟 + 自检由同一个 `build.yml` 的 `pc` 任务在每次 push 上验证（见下方「第四轮」）
 ```
 
 ## 仍未修（有意保留）
@@ -317,8 +318,37 @@ Android 完整构建（含 droidcore）由 push 触发的 GitHub Actions `build.
 | — | 服务端仍无控制通道读循环（P12 双向调度），客户端发起的一切能力都得挂在现有握手边上 |
 
 ## 仓库卫生与自检（第三轮）
-
 - 新增根 `.gitignore`；`HybridFileXfer-PC/out/`（含已入库 jar 与 .class）取消跟踪，磁盘保留。
 - 新增 `HybridFileXfer-PC/test/WatermarkProbe.java`（已修好被改坏的那行），成为水位线 / 截断 /
   文件名清洗 / 校验超时四类逻辑的唯一回归保护；运行方式写在文件头注释里。
+
+---
+
+# 第四轮：把 PC 端纳入 push 时的 CI
+
+## 背景
+
+`build.yml` 原本只构建 Android，**PC 端（`HybridFileXfer-PC`）在 push 时完全不编译**，
+只在打 tag 走 `release.yml`（`pc-windows` / `pc-linux`）时才会编 —— 中间那段时间
+“CI 绿灯”会让人误以为整仓没问题。本次差点踩中：`FileSanitizer.java` / `ReadWatchdog.java`
+曾未被 `git add`，本地工作区编译全绿，而**那个提交本身编译不过**。
+
+## 改动
+
+`build.yml` 新增 `pc` 任务（`ubuntu-latest`，与 `build` 任务并行，约 +40s），四步：
+
+1. `core/` 与 `nio/` 双端 `diff -r`（AGENTS.md 约束 1 的自动守门）；
+2. `javac` 全量 + `jar cfm ... MANIFEST` + `java -jar HybridFileXfer.jar -v` 冒烟；
+3. `test/WatermarkProbe.java` 自检（6 个场景，退出码非 0 即失败）；
+4. （无产物上传，build.yml 只做校验。）
+
+新增前已本地模拟：把 workflow 里的三段脚本抽出来，在 `git archive HEAD` 的干净检出上跑通
+（同时发现并修正了初版里 `core/` 路径漏写 `hybridfilexfer/` 段的错误——那个错会让 CI 直接报
+“No such file” 失败）。
+
+## 仍未做
+
+`release.yml` 的 `pc-linux` 任务用 `curl` 从 Maven Central 现下 annotations，而 `pc-windows`
+用仓库里 vendor 的 `libs/annotations-24.0.1.jar`。两者结果相同，但前者多了个联网依赖，
+日后可统一为都用 `libs/`。
 

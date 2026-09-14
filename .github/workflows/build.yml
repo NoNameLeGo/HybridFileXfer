@@ -67,3 +67,50 @@ jobs:
           path: '**/build/outputs/mapping'
           compression-level: 9
           include-hidden-files: true
+
+  # PC 端（Java 桌面客户端）不参与 Android 构建，没有这一步的话 PC 端的编译错误
+  # 要等到打 tag 走 release.yml（或本地手跑 javac）才会暴露，而 push 时的绿勾会给人“整仓没问题”的假象。
+  # 同时守住「core/ 与 nio/ 双端逐字节一致」这条约束。
+  pc:
+    name: 'PC 端编译 + 自检'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 'Checkout'
+        uses: actions/checkout@v5
+
+      - name: 'Setup Java 17'
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: 17
+
+      - name: '校验 core/ 与 nio/ 双端逐字节一致'
+        run: |
+          set -euo pipefail
+          diff -r HybridFileXfer-PC/src/top/weixiansen574/hybridfilexfer/core \
+                  HybridFileXfer-Android/app/src/main/java/top/weixiansen574/hybridfilexfer/core \
+            || { echo "::error::core/ 双端不一致：改一侧后必须同步另一侧（见 AGENTS.md 约束 1）"; exit 1; }
+          diff -r HybridFileXfer-PC/src/top/weixiansen574/nio \
+                  HybridFileXfer-Android/app/src/main/java/top/weixiansen574/nio \
+            || { echo "::error::nio/ 双端不一致：改一侧后必须同步另一侧（见 AGENTS.md 约束 1）"; exit 1; }
+
+      - name: 'Build HybridFileXfer.jar + 冒烟测试'
+        working-directory: 'HybridFileXfer-PC'
+        run: |
+          set -euo pipefail
+          rm -rf out/ci && mkdir -p out/ci
+          # jetbrains annotations 已 vendor 在 libs/（Apache-2.0，仅编译期依赖），无需联网下载
+          find src -name '*.java' > sources.txt
+          javac -encoding UTF-8 -cp libs/annotations-24.0.1.jar -d out/ci @sources.txt
+          cp src/messages_*.properties out/ci/
+          # 必须带入 src/META-INF/MANIFEST.MF（含 Main-Class），否则 java -jar / start.exe 启动即退
+          jar cfm HybridFileXfer.jar src/META-INF/MANIFEST.MF -C out/ci .
+          # 冒烟测试：manifest 缺 Main-Class 不会让 javac/jar 报错，只能在运行时暴露
+          java -jar HybridFileXfer.jar -v
+
+      - name: '断点续传 / 文件名清洗 / 校验超时 自检'
+        working-directory: 'HybridFileXfer-PC'
+        run: |
+          set -euo pipefail
+          javac -encoding UTF-8 -cp "libs/annotations-24.0.1.jar:out/ci" -d out/ci test/WatermarkProbe.java
+          java -cp "libs/annotations-24.0.1.jar:out/ci" WatermarkProbe

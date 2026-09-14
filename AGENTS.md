@@ -156,6 +156,10 @@ PC 端为 IntelliJ IDEA 项目（`.iml`），源码在 `src/`，编译输出在 
 
 外部依赖仅一个：jetbrains annotations，已 vendor 在 `libs/annotations-24.0.1.jar`（约 30KB，Apache-2.0，仅编译期使用，不进入运行时）。本地与 CI 均无需联网下载；IntelliJ 内编译仍使用 IDE 自己配置的同一依赖。
 
+**CI 覆盖**：`build.yml` 的 `pc` 任务在**每次 push / PR** 上都会跑
+「`core/` 与 `nio/` 双端逐字节一致 + javac 全量 + jar 冒烟 + 自检」，
+所以 PC 端不再依赖“记得本地跑”。本地跑同样的命令只是为了**反馈更快**（约 15s vs 一两分钟）。
+
 ```bash
 # 手动编译（与 .github/workflows/release.yml 的命令保持一致）
 find src -name '*.java' > sources.txt
