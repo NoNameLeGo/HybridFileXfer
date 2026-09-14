@@ -28,10 +28,6 @@ public class FileBlock implements Comparable<FileBlock> {
         return  BLOCK_SIZE * ((long) index);
     }
 
-    public long calcBlockCount(){
-        return totalSize / BLOCK_SIZE + 1;
-    }
-
     public boolean isFile(){
         return isFile;
     }

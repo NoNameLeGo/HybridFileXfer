@@ -122,10 +122,13 @@ HybridFileXfer/
 | 常量 | 值 | 说明 |
 |------|-----|------|
 | `FileBlock.BLOCK_SIZE` | 1024×1024 (1MB) | 分块大小 |
-| `HFXService.VERSION_CODE` | 300 | 协议版本 |
+| `HFXService.VERSION_CODE` | 303 | 协议版本（302→303：握手互换稳定设备标识 + 校验请求/结果回传） |
 | `HFXService.CLIENT_HEADER` | "HFXC" | 控制通道握手标识 |
 | `ControllerIdentifiers.REQUEST_RECEIVE` | 10 | 请求接收文件 |
 | `ControllerIdentifiers.REQUEST_SEND` | 11 | 请求发送文件 |
+| `ControllerIdentifiers.CHECKPOINT_REQUEST` | 14 | 断点续传：交换文件列表与检查点 |
+| `ControllerIdentifiers.FILE_CHECKSUM_REQUEST` | 16 | 文件校验：请求对端计算 MD5 |
+| `ControllerIdentifiers.FILE_CHECKSUM_RESULT` | 17 | 文件校验：发起方回传校验结果 |
 | `TransferIdentifiers.FILE` | 0 | 文件数据块 |
 | `TransferIdentifiers.FOLDER` | 1 | 文件夹标记 |
 | `TransferIdentifiers.EOF` | 3 | 传输结束 |
@@ -157,6 +160,11 @@ cp src/messages_*.properties out/
 
 # 打 jar（必须引用 src/META-INF/MANIFEST.MF，缺 Main-Class 会让 java -jar 启动即退）
 jar cvfm HybridFileXfer.jar src/META-INF/MANIFEST.MF -C out .
+
+# 断点续传水位线的回归自检（全项目唯一测试，无框架，通过时退出码 0；Windows 用 ; 分隔 classpath）
+javac -encoding UTF-8 -cp libs/annotations-24.0.1.jar -d .verify $(find src -name '*.java')
+javac -encoding UTF-8 -cp "libs/annotations-24.0.1.jar;.verify" -d .verify test/WatermarkProbe.java
+java -cp "libs/annotations-24.0.1.jar;.verify" WatermarkProbe
 ```
 
 ---
@@ -201,12 +209,12 @@ jar cvfm HybridFileXfer.jar src/META-INF/MANIFEST.MF -C out .
 | 阶段 | 内容 | 状态 |
 |------|------|------|
 | P0 | CheckpointManager + 数据层（SQLite / JSON） | ✅ 已完成（Android CheckpointEntry 存 ConfigDB transfer_checkpoint 表 / PC JdkCheckpointManager 存 JSON Lines，7 天自动清理） |
-| P1 | ControllerIdentifiers 新增常量 + checkpoint 协议读写 | ✅ 已完成（CHECKPOINT_REQUEST=14；握手中交换文件列表 + 检查点；VERSION_CODE 升至 301） |
+| P1 | ControllerIdentifiers 新增常量 + checkpoint 协议读写 | ✅ 已完成（CHECKPOINT_REQUEST=14；握手中交换文件列表 + 检查点；VERSION_CODE 现为 303） |
 | P2 | WriteFileCall：续写 + checkpoint + md5 + 写入验证 | ◑ 部分完成（续写 + 每块存档 + 完成即清除 + 磁盘校验兜底；md5 采用传输后可选校验方案，写入验证未做） |
 | P3 | ReadFileCall：跳过已传块 + md5 累积 | ◑ 部分完成（跳过已传块；不做传输中 md5 累积，改为传输完成后可选全量校验） |
-| P4 | FileSanitizer：文件名非法字符清洗 | ⬜ 待开始（Directory.generateTransferPath 已有基础替换） |
-| P5 | HFXService：checkpoint + checksum 握手集成 | ◑ 部分完成（checkpoint 握手 + 磁盘有效性校验；MD5 校验以"传输完成后可选"形式实现：FILE_CHECKSUM_REQUEST=16，服务端发起、客户端主循环响应，双方各算本地副本 MD5 对比） |
-| P6 | IIOService.aidl + IOServiceImpl | ◑ 部分完成（新增 getFileSize=14 + 打开文件不再截断；createAndOpenWriteableFile 带 skipBlocks 未做） |
+| P4 | FileSanitizer：文件名非法字符清洗 | ✅ 已完成（新增 `core/FileSanitizer`：非法字符/控制字符、Windows 尾部点与空格、保留设备名 CON/NUL/COM1…、超长段截断；并在握手前对传输路径去重） |
+| P5 | HFXService：checkpoint + checksum 握手集成 | ◑ 部分完成（checkpoint 握手 + 磁盘有效性校验；MD5 校验以"传输完成后可选"形式实现：FILE_CHECKSUM_REQUEST=16，服务端发起、客户端主循环响应，双方各算本地副本 MD5 对比；客户端可用 `-x/--checksum` 请求校验，结果经 FILE_CHECKSUM_RESULT=17 回传） |
+| P6 | IIOService.aidl + IOServiceImpl | ◑ 部分完成（新增 getFileSize=14 + 打开文件不再截断；长度处理统一由 `WriteFileCall` 做只缩不扩的 `truncate`；createAndOpenWriteableFile 带 skipBlocks 未做） |
 | P7 | HFXClient / HFXServer peerId 传递 | ✅ 已完成（客户端=服务器地址，服务端=控制通道对端 IP） |
 | P8 | TransferFileCallback 新增回调 + TransferDialog 进度条 | ✅ 已完成（onTransferStarted / onOverallProgress 进度回调 + onFileChecksumComplete 校验回调 + 进度条 UI + "MD5 校验"按钮） |
 | P9 | Main / ClientActivity / TransferActivity UI 集成 | ✅ 已完成（PC 单行进度刷新；Android TransferDialog 与 ClientActivity 显示百分比/字节） |
@@ -215,4 +223,33 @@ jar cvfm HybridFileXfer.jar src/META-INF/MANIFEST.MF -C out .
 | P12 | PC GUI + TF 卡访问 | ⬜ 待开始 |
 | P13 | 分块大小可配置 + 双轨性能分析 | ⬜ 待开始 |
 | P14 | 拖拽多选 + 省电提醒 | ⬜ 待开始 |
-| P15 | 代码抽模块 + PC Gradle + 单元测试 | ⬜ 待开始（断点续传核心逻辑已有本地集成测试通过） |
+| P15 | 代码抽模块 + PC Gradle + 单元测试 | ⬜ 待开始（自检已覆盖水位线/截断/文件名清洗/校验超时：`HybridFileXfer-PC/test/WatermarkProbe.java`） |
+
+### 后续改动必须遵守的约束
+
+改动 `core/` 或传输协议前先读这几条（踩过的坑，详见 `CODE_REVIEW_FINDINGS.md`）：
+
+1. **`core/` 在 PC 与 Android 两侧是逐字节镜像。** 改一侧后必须 `cp` 同步另一侧，并分别编译：
+   PC 用 `javac`；Android 侧 `core/` 可绕过 Gradle 用 javac 单独编译（不依赖 Android SDK）：
+
+   ```bash
+   cd HybridFileXfer-Android/app/src/main/java
+   javac -encoding UTF-8 -cp ../../../../../HybridFileXfer-PC/libs/annotations-24.0.1.jar -d /tmp/core \
+     top/weixiansen574/hybridfilexfer/core/*.java top/weixiansen574/hybridfilexfer/core/*/*.java top/weixiansen574/nio/*.java
+   ```
+
+   （`droidcore/` 依赖 Android SDK，只能在 GitHub Actions 构建里验证。）
+2. **检查点只能记录连续前缀水位线**，不能记"最后落盘块的末尾"。多通道乱序下后者会跳过未到达的前序块，
+   在文件里留下永久空洞（`WriteFileCall.FileState.contiguousBytes` + `advanceWatermark`）。
+3. **接收端打开文件后必须 `truncate(totalSize)`**（只缩不扩）。去掉它，同名文件被改小后重传会残留脏尾巴，
+   且无检查点时没有任何防护，MD5 默认关闭时为静默损坏。
+4. **握手/控制通道的字段读写顺序必须严格对称**，任何增删字段都要提升 `VERSION_CODE`；
+   旧版会因多读/少读字段而错位死锁（表现为传输卡死，不是报错）。
+5. **对端标识不能用 IP**（用握手互换的设备标识），否则同一设备换连接方式（USB/WLAN）就会被当成新对端，续传失效。
+6. 服务端（HFXServer）**没有控制通道读循环**，只能由服务端发起请求、客户端在控制循环中应答；
+   客户端需要发起的能力要挂到现有握手边上，或先补 P12 的双向调度。
+7. **传输路径是检查点主键 + 落盘状态（水位线）键 + 校验清单键**，必须唯一且与磁盘真实文件名一致：
+   文件名清洗（`FileSanitizer`）必须确定性，清洗后可能撞车时用 `FileSanitizer.uniquePath` 加序号，
+   否则两个文件会共享一份 `FileState` → 输出损坏。
+8. **控制通道的阻塞读没有 SO_TIMEOUT**（NIO SocketChannel 不支持，实测无效），
+   需要超时的地方用 `ReadWatchdog`（超时关通道让阻塞读抛 `AsynchronousCloseException`）。

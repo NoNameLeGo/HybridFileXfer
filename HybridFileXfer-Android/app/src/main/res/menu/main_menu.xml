@@ -27,6 +27,10 @@
                 android:id="@+id/client"
                 android:icon="@drawable/baseline_phonelink_ring_24"
                 android:title="@string/lian_jie_shou_ji_fu_wu_duan" />
+            <item
+                android:id="@+id/clear_checkpoints"
+                android:icon="@drawable/baseline_grid_view_24"
+                android:title="清除断点续传记录" />
 
         </menu>
     </item>

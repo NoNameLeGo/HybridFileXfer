@@ -21,6 +21,9 @@ import java.util.List;
 import java.util.Map;
 
 public class Main {
+    /** -x/--checksum：无值开关，请求服务端在传输完成后执行 MD5 文件校验（结果由服务端回传） */
+    private static final String ARG_CHECKSUM = "-x";
+
     private static final ConnectServerCallback connectServerCallback = new ConnectServerCallback() {
         @Override
         public void onConnectingControlChannel(String address, int port) {
@@ -154,8 +157,25 @@ public class Main {
             } else {
                 Strings.printf("download_complete", Utils.formatSpeed(traffic / time * 1000), Utils.formatTime(time), Utils.formatFileSize(traffic));
             }
-            //传输完成后的可选项：MD5 文件校验由手机端（服务端）发起
-            System.out.println("如需校验文件完整性，请在手机端传输界面点击“MD5 校验”。");
+            //传输完成后的可选项：连接时加 -x/--checksum，由服务端在传输完成后自动校验
+            System.out.println("如需校验文件完整性，连接时加 -x/--checksum 参数，或在手机端传输界面点击“MD5 校验”。");
+        }
+
+        @Override
+        public void onFileChecksumComplete(boolean passed, List<String> mismatchFiles) {
+            System.out.println();
+            if (passed) {
+                System.out.println("MD5 校验通过 ✓");
+                return;
+            }
+            System.out.println("MD5 校验失败：" + mismatchFiles.size() + " 个文件内容不一致或缺失 ✗（建议重新传输）");
+            int shown = Math.min(mismatchFiles.size(), 20);
+            for (int i = 0; i < shown; i++) {
+                System.out.println("    " + mismatchFiles.get(i));
+            }
+            if (mismatchFiles.size() > shown) {
+                System.out.println("    …（其余 " + (mismatchFiles.size() - shown) + " 个省略）");
+            }
         }
 
         @Override
@@ -212,6 +232,8 @@ public class Main {
         }
 
         JdkHFXClient hfxClient = new JdkHFXClient(serverAddress, 5740, homeDir);
+        //-x/--checksum：告知服务端本轮传输后执行 MD5 校验（服务端发起、本端应答并收结果）
+        hfxClient.requestChecksumOnTransfer = paramMap.containsKey(ARG_CHECKSUM);
         if (hfxClient.connect(connectServerCallback)) {
             hfxClient.start(clientCallBack);
         }
@@ -232,6 +254,8 @@ public class Main {
 
                 String value = null;
                 String key = arg;
+                //无值开关：不能把下一个参数当作它的值吞掉
+                boolean flagOnly = arg.equals(ARG_CHECKSUM) || arg.equals("--checksum");
 
                 // 有等号拆为键值对
                 if (arg.contains("=")) {
@@ -240,8 +264,8 @@ public class Main {
                         value = arg.substring(eqPos + 1);
                     }
                     key = arg.substring(0, eqPos);
-                }   // 无等号获取下一个参数为值，跳过下一个参数
-                else if (i + 1 < args.length && !args[i + 1].startsWith("-")) {
+                }   // 无等号获取下一个参数为值，跳过下一个参数（无值开关除外）
+                else if (!flagOnly && i + 1 < args.length && !args[i + 1].startsWith("-")) {
                     value = args[i + 1];
                     i++;
                 }
@@ -254,11 +278,13 @@ public class Main {
                     case "--dir":           key = "-d"; break;
                     case "--help":          key = "-h"; break;
                     case "--version":       key = "-v"; break;
+                    case "--checksum":      key = ARG_CHECKSUM; break;
                     case "-c":
                     case "-s":
                     case "-d":
                     case "-h":
                     case "-v":
+                    case ARG_CHECKSUM:
                         break;
                     default: // 非法参数处理
                         if (arg.startsWith("-")) {

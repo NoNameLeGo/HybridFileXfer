@@ -370,9 +370,28 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             dialog.show();
         } else if (itemId == R.id.client) {
             startClient();
+        } else if (itemId == R.id.clear_checkpoints) {
+            confirmClearCheckpoints();
         }
 
         return super.onOptionsItemSelected(item);
+    }
+
+    /**
+     * 清除全部断点续传记录（Issue #43 规划里的「手动清除 checkpoint」入口）。
+     * <p>用途：目标文件已手动删除/改动、或数据错乱时，让下次传输不再从旧水位线续传。</p>
+     */
+    private void confirmClearCheckpoints() {
+        new AlertDialog.Builder(context)
+                .setTitle("清除断点续传记录")
+                .setMessage("将删除所有对端的续传记录（已传输的文件本身不受影响）。\n"
+                        + "删除后，下次传输已中断的文件会从头开始。")
+                .setNegativeButton(R.string.cancel, null)
+                .setPositiveButton(R.string.ok, (d, w) -> {
+                    int deleted = ConfigDB.getInstance(context).clearAllCheckpoints();
+                    Toast.makeText(context, "已清除 " + deleted + " 条续传记录", Toast.LENGTH_SHORT).show();
+                })
+                .show();
     }
 
     private void startClient() {

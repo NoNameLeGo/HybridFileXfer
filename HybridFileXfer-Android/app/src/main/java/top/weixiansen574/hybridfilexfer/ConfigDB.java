@@ -219,6 +219,15 @@ public class ConfigDB extends SQLiteOpenHelper {
     }
 
     /**
+     * 清除所有对端的检查点（UI 里的「清除断点续传记录」）。
+     *
+     * @return 被删除的记录数
+     */
+    public int clearAllCheckpoints() {
+        return getWritableDatabase().delete("transfer_checkpoint", null, null);
+    }
+
+    /**
      * 清理超过指定天数未更新的检查点。
      */
     public void cleanupOldCheckpoints(int maxAgeDays) {

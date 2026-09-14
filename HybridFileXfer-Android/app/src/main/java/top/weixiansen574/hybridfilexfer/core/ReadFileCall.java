@@ -1,7 +1,9 @@
 package top.weixiansen574.hybridfilexfer.core;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
@@ -27,6 +29,14 @@ public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
     private final Map<String, Long> checkpoints;
     private final AtomicLong completedBytes = new AtomicLong(0);
     private int fileIndex = -1;
+    /** 递归展开后的完整待传清单（含子目录内容）。由 HFXService 在握手前设置，避免重复遍历文件系统 */
+    private List<RemoteFile> expandedFiles;
+    /**
+     * 本地源路径 → 传输路径。由 HFXService 在握手前设置：
+     * 握手清单、进度总量、校验清单与文件块都再用同一份映射，
+     * 避免两处各自调用 generateTransferPath 时不一致（已清洗撞车的名字会在那里加序号去重）。
+     */
+    private Map<String, String> transferPaths;
 
     public ReadFileCall(LinkedBlockingDeque<ByteBuffer> buffers, List<RemoteFile> files, Directory localDir, Directory remoteDir, int operateThreadCount, Map<String, Long> checkpoints) {
         this.buffers = buffers;
@@ -42,17 +52,70 @@ public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
         return completedBytes.get();
     }
 
-    @Override
-    public Void call() throws Exception {
-        try {
-            for (RemoteFile file : files) {
+    /**
+     * 设置递归展开后的完整待传清单。
+     * <p>由 {@link HFXService#sendFiles} 在检查点握手前调用：握手清单、总字节数、
+     * 校验清单都必须覆盖子目录内容，否则文件夹内的文件无法续传、不计入进度、不被校验。</p>
+     */
+    public void setExpandedFiles(List<RemoteFile> expandedFiles) {
+        this.expandedFiles = expandedFiles;
+    }
+
+    /** 设置源路径 → 传输路径映射（由 {@link HFXService#sendFiles} 在握手前调用） */
+    public void setTransferPaths(Map<String, String> transferPaths) {
+        this.transferPaths = transferPaths;
+    }
+
+    /** 该文件对应的传输路径：优先用握手时确定的映射，未命中时退化为现算 */
+    private String transferPath(RemoteFile file) {
+        String mapped = transferPaths == null ? null : transferPaths.get(file.getPath());
+        return mapped != null ? mapped : localDir.generateTransferPath(file.getPath(), remoteDir);
+    }
+
+    /**
+     * 递归展开待传清单：目录项在前，其子项紧随其后（与实际读取顺序、fileIndex 分配顺序一致）。
+     * <p>沿用原有的容错语义：不存在的顶层项跳过，无法列出的目录跳过其子树，不抛出异常。</p>
+     */
+    public List<RemoteFile> expandFileList() {
+        List<RemoteFile> expanded = new ArrayList<>();
+        for (RemoteFile file : files) {
+            try {
                 if (!fileExists(file.getPath())) {
                     continue;
                 }
+            } catch (Exception e) {
+                continue;
+            }
+            collect(file, expanded);
+        }
+        return expanded;
+    }
+
+    private void collect(RemoteFile file, List<RemoteFile> out) {
+        out.add(file);
+        if (!file.isDirectory()) {
+            return;
+        }
+        List<RemoteFile> children;
+        try {
+            children = listFiles(file.getPath());
+        } catch (Exception e) {
+            return;
+        }
+        if (children != null) {
+            for (RemoteFile child : children) {
+                collect(child, out); // 递归遍历子文件夹
+            }
+        }
+    }
+
+    @Override
+    public Void call() throws Exception {
+        try {
+            //清单已在握手阶段展开则直接复用，避免二次遍历文件系统
+            List<RemoteFile> targets = expandedFiles != null ? expandedFiles : expandFileList();
+            for (RemoteFile file : targets) {
                 readToDeque(file);
-                if (file.isDirectory()) {
-                    listFilesAndRead(file);
-                }
             }
             for (int i = 0; i < operateThreadCount; i++) {
                 deque.add(END_POINT);
@@ -67,23 +130,11 @@ public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
         return null;
     }
 
-    private void listFilesAndRead(RemoteFile folder) throws Exception {
-        List<RemoteFile> files = listFiles(folder.getPath());
-        if (files != null) {
-            for (RemoteFile file : files) {
-                readToDeque(file);
-                if (file.isDirectory()) {
-                    listFilesAndRead(file); // 递归遍历子文件夹
-                }
-            }
-        }
-    }
-
     private void readToDeque(RemoteFile file) throws Exception {
         fileIndex++;
         if (file.isDirectory()) {
             deque.add(new FileBlock(false,
-                    fileIndex, localDir.generateTransferPath(file.getPath(), remoteDir),
+                    fileIndex, transferPath(file),
                     file.lastModified(), 0, 0, null));
             return;
         }
@@ -99,7 +150,9 @@ public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
         long remaining = length;
         if (alignedSkip > 0) {
             if (alignedSkip >= length) {
-                //整个文件已传完（或文件被改动变小），无需再发送任何块，接收方保留现有文件
+                //整个文件已传完（或文件被改动变小），无需再发送任何块，接收方保留现有文件。
+                //进度按文件大小计入，否则本端进度永远到不了 100%
+                completedBytes.addAndGet(length);
                 closeFile();
                 return;
             }
@@ -112,7 +165,7 @@ public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
             buffer.clear();
             buffer.limit(0);
             deque.add(new FileBlock(true,
-                    fileIndex, localDir.generateTransferPath(file.getPath(), remoteDir),
+                    fileIndex, transferPath(file),
                     lastModified, length, 0, buffer));
             closeFile();
             return;
@@ -124,11 +177,17 @@ public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
             ByteBuffer buffer = buffers.take();
             buffer.clear();
             buffer.limit(blkSize);
+            int read;
             while (buffer.hasRemaining()) {
-                channel.read(buffer);
+                read = channel.read(buffer);
+                if (read < 0) {
+                    //源文件在 size() 之后被截断：必须抛错，否则 hasRemaining() 恒为 true 导致死循环
+                    closeFile();
+                    throw new IOException("source file shrank while reading: " + file.getPath());
+                }
             }
             deque.add(new FileBlock(true,
-                    fileIndex, localDir.generateTransferPath(file.getPath(), remoteDir),
+                    fileIndex, transferPath(file),
                     lastModified, length, i, buffer));
             completedBytes.addAndGet(blkSize);
             remaining -= blkSize;

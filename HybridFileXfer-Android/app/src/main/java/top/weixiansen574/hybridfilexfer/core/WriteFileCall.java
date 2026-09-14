@@ -3,14 +3,24 @@ package top.weixiansen574.hybridfilexfer.core;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedList;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.LinkedBlockingDeque;
 import java.util.concurrent.atomic.AtomicLong;
 
-import top.weixiansen574.hybridfilexfer.core.callback.TransferFileCallback;
-
 public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
+    /**
+     * 同一文件的检查点最小持久化间隔（毫秒）。
+     * <p>高速传输时每块一次存储写入开销显著（PC 端为 JSON 全量重写、Android 端为 SQLite 同步写），
+     * 故按时间节流。节流丢失的进度最多为该间隔内传输的字节数，
+     * 续传时表现为多重传一小段——方向是安全的，不会产生空洞。</p>
+     */
+    private static final long CHECKPOINT_SAVE_INTERVAL_MS = 1000;
+
     private final LinkedBlockingDeque<ByteBuffer> buffers;
     private final boolean[] channelFinished;
     private final ArrayList<LinkedList<FileBlock>> dequeArray;
@@ -19,6 +29,8 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
     private final CheckpointManager checkpointManager;
     private final String peerId;
     private final AtomicLong completedBytes = new AtomicLong(0);
+    /** 传输路径 → 该文件的落盘状态。多通道乱序到达时同一文件会被反复写入，状态必须按文件保存 */
+    private final Map<String, FileState> fileStates = new HashMap<>();
     private boolean canceled = false;
 
     public WriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount,
@@ -39,126 +51,231 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
         return completedBytes.get();
     }
 
+    /**
+     * 单个文件的落盘状态。
+     * <p>核心是 {@link #contiguousBytes}（连续已完成水位线）：只有从文件起始开始
+     * 不间断落盘的字节才计入。多通道并行时块会乱序到达（快通道的后续块可能先于
+     * 慢通道的前序块落盘），若直接以"最后落盘块的末尾偏移"作为检查点，
+     * 续传时会跳过尚未到达的前序块，在文件中留下永久空洞。</p>
+     */
+    private static final class FileState {
+        final long totalSize;
+        final long lastModified;
+        /** 连续已完成字节水位线：[0, contiguousBytes) 区间的数据确定已落盘 */
+        long contiguousBytes;
+        /** 已落盘但尚未被水位线覆盖的超前块：块起始偏移 → 块末尾偏移 */
+        final TreeMap<Long, Long> aheadBlocks = new TreeMap<>();
+        /** 续传跳过的字节数（对齐到块边界），这些数据由上次传输写入 */
+        long skipBytes;
+        /** 是否已完成首次打开（跳过量与进度只在首次打开时结算一次） */
+        boolean opened;
+        /** 检查点最近一次持久化时间，用于节流 */
+        long lastSaveTime;
+        /** 存在被节流跳过的检查点更新，需在结束前补写 */
+        boolean pendingSave;
+        /** 该文件已完整落盘且检查点已清除 */
+        boolean checkpointCleared;
+
+        FileState(long totalSize, long lastModified) {
+            this.totalSize = totalSize;
+            this.lastModified = lastModified;
+        }
+
+        boolean isComplete() {
+            return contiguousBytes >= totalSize;
+        }
+    }
+
     @Override
     public Void call() throws Exception {
+        //当前已打开的文件路径与句柄（乱序到达时可能被切换/重开）
+        String openPath = null;
+        FileChannel channel = null;
+        //当前句柄的写指针；-1 表示位置未知，下次写入前强制 seek
+        long cursor = -1;
+
         try {
             FileBlock block = takeBlock();
-            FileBlock lastBlock = null;
-            /*File lastFile = null;
-            RandomAccessFile lastRaf = null;*/
-            FileChannel lastChannel = null;
-            long cursor = 0;
-            //当前文件的断点续传跳过字节数（在打开新文件时确定）
-            long skipBytes = 0;
 
             while (block != null) {
                 if (block.isDirectory()) {
-                    //File file = new File(block.path);
-                    String file = block.path;
-                    tryMkdirs(file);
-                    setLastModified(file, block.lastModified);
+                    tryMkdirs(block.path);
+                    setLastModified(block.path, block.lastModified);
                     block = takeBlock();
                     continue;
                 }
                 //创建文件的父目录，如果不存在，保证后续文件能够创建
                 createParentDirIfNotExists(block.path);
-                //RandomAccessFile raf;
-                FileChannel channel;
-                //如果上个文件与当前
-                if (lastBlock == null || !lastBlock.path.equals(block.path)) {
-                    if (lastChannel != null) {
+                FileState state = stateOf(block);
+
+                if (!block.path.equals(openPath)) {
+                    if (channel != null) {
                         closeFile();
-                        //上一个文件已完整接收（排序取出保证其所有块均到达并写盘），清除其检查点
-                        checkpointManager.clearCheckpoint(lastBlock.path, peerId);
-                        setLastModified(lastBlock.path, lastBlock.lastModified);
+                        setLastModified(openPath, fileStates.get(openPath).lastModified);
                     }
-                    /*raf = new RandomAccessFile(file, "rw");
-                    raf.setLength(block.totalSize);
-                    channel = raf.getChannel();*/
                     channel = createAndOpenFile(block.path, block.totalSize);
-                    //断点续传：跳过已有数据的部分（字节偏移为持久化单位）。
-                    //持久化值可能来自不同的块大小配置，与发送端一致地对齐到当前块大小边界
-                    skipBytes = (checkpoints.getOrDefault(block.path, 0L) / FileBlock.BLOCK_SIZE) * FileBlock.BLOCK_SIZE;
-                    if (skipBytes > 0 && channel.size() < skipBytes) {
-                        //握手后目标文件被删除/截断：skip 状态已失效，抛错终止本次传输，
-                        //下次握手时磁盘校验会判定检查点无效，从而全量重传，避免写出空洞文件
-                        throw new IOException("checkpoint stale: target file missing or truncated: " + block.path);
+                    //只缩不扩地清掉旧文件尾巴：同名文件被改小后重传时，旧实现靠 setLength 预分配自带
+                    //截断，去掉预分配后必须显式截断，否则比本次传输更长的旧内容残留在文件尾部。
+                    //续传时文件长度小于 totalSize，truncate 不改动文件，也不会像 setLength 那样撑出空洞
+                    channel.truncate(block.totalSize);
+                    openPath = block.path;
+                    cursor = -1;
+                    if (!state.opened) {
+                        state.opened = true;
+                        initSkip(block, state, channel);
                     }
-                    if (skipBytes > 0) {
-                        //检查点显示的已完成数据会计入进度
-                        completedBytes.addAndGet(Math.min(skipBytes, block.totalSize));
-                    }
-                    cursor = 0;
-                } else {
-                    //raf = lastRaf;
-                    channel = lastChannel;
                 }
-                //如果上个指针与当前指针不不一致就进行seek操作
+
+                //断点续传：跳过已被确认的块（不写入磁盘；进度已在首次打开时计入）
+                if (block.getStartPosition() < state.skipBytes) {
+                    buffers.add(block.data);
+                    block = takeBlock();
+                    continue;
+                }
+
+                //如果上个指针与当前指针不一致就进行 seek 操作
                 if (cursor != block.getStartPosition()) {
                     cursor = block.getStartPosition();
                     channel.position(cursor);
                 }
-                //断点续传：跳过已被确认的块（不写入磁盘；进度已在打开文件时计入）
-                if (block.getStartPosition() < skipBytes) {
-                    //回收缓冲区块
-                    buffers.add(block.data);
-                    lastBlock = block;
-                    lastChannel = channel;
-                    block = takeBlock();
-                    continue;
-                }
-                 /*   logSeek(block);
-                } else {
-                    logBlock(block);
-                }*/
 
                 ByteBuffer data = block.data;
                 data.flip();
-                channel.write(data);
-                int written = data.position();
-                cursor += written;
-                completedBytes.addAndGet(written);
-                //保存检查点：记录当前文件已确认完成的字节偏移（块头位置 + 本块实际写入字节）
-                checkpointManager.saveCheckpoint(block.path, block.totalSize,
-                        block.lastModified, (long) block.index * FileBlock.BLOCK_SIZE + written, peerId);
+                int length = data.limit();
+                //FileChannel.write 不保证一次写完，必须循环写尽，
+                //否则剩余字节随缓冲区回收而永久丢失，在文件中留下空洞
+                while (data.hasRemaining()) {
+                    if (channel.write(data) <= 0) {
+                        throw new IOException("write stalled at " + cursor + ": " + block.path);
+                    }
+                }
+                cursor += length;
+                completedBytes.addAndGet(length);
                 //回收缓冲区块
-                buffers.add(block.data);
-                lastBlock = block;
-                /*lastFile = file;
-                lastRaf = raf;*/
-                lastChannel = channel;
+                buffers.add(data);
+
+                advanceWatermark(state, block.getStartPosition(), length);
+                saveOrClearCheckpoint(block.path, state);
+
                 block = takeBlock();
             }
-            if (lastBlock != null) {
-                closeFile();
-                //只有在传输未被取消、且文件最后一块已写入时才清除检查点；
-                //传输中断/取消时保留检查点，以便下次续传
-                if (!canceled && isFileComplete(lastBlock)) {
-                    checkpointManager.clearCheckpoint(lastBlock.path, peerId);
-                }
-                setLastModified(lastBlock.path, lastBlock.lastModified);
-            }
-        } catch (IOException e){
+        } catch (IOException e) {
             cancel();
             throw e;
+        } finally {
+            //无论正常结束还是 IO 异常，都必须关闭当前句柄并补写被节流跳过的检查点：
+            //否则残留的 fd（Android 为跨进程 PFD）泄漏，且最后一段水位线丢失退化为多重传
+            closeCurrentFile(channel, openPath);
+            flushCheckpoints();
         }
         return null;
     }
 
-    private void logSeek(FileBlock block) {
-        System.out.printf("seek: %d %s %d %d %d%n",
-                block.getStartPosition(), block.path, block.totalSize, block.index, block.getLength());
+    /** 关闭当前文件句柄并回写修改时间；关闭失败不能掩盖原始异常 */
+    private void closeCurrentFile(FileChannel channel, String openPath) {
+        if (channel == null || openPath == null) {
+            return;
+        }
+        try {
+            closeFile();
+            FileState state = fileStates.get(openPath);
+            if (state != null) {
+                setLastModified(openPath, state.lastModified);
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
-    /** 判断该文件是否已完整写入（最后一块已落盘） */
-    private boolean isFileComplete(FileBlock lastBlock) {
-        long totalBlocks = (lastBlock.totalSize + FileBlock.BLOCK_SIZE - 1) / FileBlock.BLOCK_SIZE;
-        return lastBlock.index == totalBlocks - 1;
+    private FileState stateOf(FileBlock block) {
+        FileState state = fileStates.get(block.path);
+        if (state == null) {
+            state = new FileState(block.totalSize, block.lastModified);
+            fileStates.put(block.path, state);
+        }
+        return state;
     }
 
-    private void logBlock(FileBlock block) {
-        System.out.printf("%s %d %d %d%n",
-                block.path, block.totalSize, block.index, block.getLength());
+    /**
+     * 首次打开文件时结算断点续传跳过量。
+     * <p>持久化值可能来自不同的块大小配置，与发送端一致地对齐到当前块大小边界。
+     * 每个文件只结算一次，避免乱序重开时重复累加进度。</p>
+     */
+    private void initSkip(FileBlock block, FileState state, FileChannel channel) throws IOException {
+        long skipBytes = (checkpoints.getOrDefault(block.path, 0L) / FileBlock.BLOCK_SIZE) * FileBlock.BLOCK_SIZE;
+        if (skipBytes <= 0) {
+            return;
+        }
+        if (channel.size() < skipBytes) {
+            //握手后目标文件被删除/截断：skip 状态已失效，抛错终止本次传输，
+            //下次握手时磁盘校验会判定检查点无效，从而全量重传，避免写出空洞文件
+            throw new IOException("checkpoint stale: target file missing or truncated: " + block.path);
+        }
+        state.skipBytes = skipBytes;
+        //跳过的数据即已完成的连续前缀，作为水位线起点
+        state.contiguousBytes = skipBytes;
+        //检查点显示的已完成数据会计入进度
+        completedBytes.addAndGet(Math.min(skipBytes, block.totalSize));
+    }
+
+    /**
+     * 推进连续水位线：块紧接水位线时前移，并连带吸收此前记录的超前块；
+     * 否则仅登记为超前块，等待前序块到达后再吸收。
+     */
+    private void advanceWatermark(FileState state, long startPosition, int length) {
+        long end = startPosition + length;
+        if (startPosition == state.contiguousBytes) {
+            state.contiguousBytes = end;
+            Long next;
+            while ((next = state.aheadBlocks.remove(state.contiguousBytes)) != null) {
+                state.contiguousBytes = next;
+            }
+        } else if (startPosition > state.contiguousBytes) {
+            state.aheadBlocks.put(startPosition, end);
+        }
+        //startPosition < contiguousBytes 为重复块，正常流程不会出现，忽略
+    }
+
+    /**
+     * 文件完整落盘则立即清除检查点；否则按节流间隔持久化当前水位线。
+     * <p>清除时机取决于水位线而非文件切换：乱序传输下"切到下一个文件"
+     * 并不意味着上一个文件已收全。</p>
+     */
+    private void saveOrClearCheckpoint(String path, FileState state) {
+        if (state.isComplete()) {
+            if (!state.checkpointCleared) {
+                checkpointManager.clearCheckpoint(path, peerId);
+                state.checkpointCleared = true;
+                state.pendingSave = false;
+            }
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - state.lastSaveTime < CHECKPOINT_SAVE_INTERVAL_MS) {
+            state.pendingSave = true;
+            return;
+        }
+        state.lastSaveTime = now;
+        state.pendingSave = false;
+        checkpointManager.saveCheckpoint(path, state.totalSize, state.lastModified,
+                state.contiguousBytes, peerId);
+    }
+
+    private void flushCheckpoints() {
+        for (Map.Entry<String, FileState> entry : fileStates.entrySet()) {
+            FileState state = entry.getValue();
+            if (state.checkpointCleared) {
+                continue;
+            }
+            if (state.isComplete()) {
+                checkpointManager.clearCheckpoint(entry.getKey(), peerId);
+                state.checkpointCleared = true;
+            } else if (state.pendingSave) {
+                checkpointManager.saveCheckpoint(entry.getKey(), state.totalSize,
+                        state.lastModified, state.contiguousBytes, peerId);
+                state.pendingSave = false;
+            }
+        }
     }
 
     public ByteBuffer getBuffer() throws InterruptedException {
@@ -186,7 +303,6 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
 
     // 修改后的putBlock（保持原有逻辑）
     public synchronized void putBlock(FileBlock block, int tIndex) {
-        //System.out.println("put:"+block.index+" "+tIndex);
         dequeArray.get(tIndex).add(block);
         notify();  // 唤醒可能阻塞的写线程
     }

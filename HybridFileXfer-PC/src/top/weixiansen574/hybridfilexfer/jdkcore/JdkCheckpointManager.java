@@ -13,6 +13,9 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -122,13 +125,14 @@ public class JdkCheckpointManager implements CheckpointManager {
                     writer.newLine();
                 }
             }
-            // 原子替换：直接 rename 在目标存在时可能失败，先删旧文件
-            if (file.exists() && !file.delete()) {
-                System.err.println("failed to replace checkpoints file: " + file);
-                return;
-            }
-            if (!tmp.renameTo(file)) {
-                System.err.println("failed to rename checkpoints file: " + file);
+            //原子替换：不可先 delete 再 rename——两步之间崩溃会导致检查点文件整体消失。
+            //同目录内的 ATOMIC_MOVE 在 Windows / POSIX 上均由文件系统保证原子性
+            try {
+                Files.move(tmp.toPath(), file.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                //极少数文件系统不支持原子移动，退化为普通替换
+                Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (IOException e) {
             System.err.println("failed to save checkpoints: " + e);

@@ -19,6 +19,7 @@ import java.util.concurrent.FutureTask;
 import java.util.concurrent.LinkedBlockingDeque;
 
 import top.weixiansen574.async.BackstageTask;
+import top.weixiansen574.hybridfilexfer.Config;
 import top.weixiansen574.hybridfilexfer.NativeMemory;
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
 import top.weixiansen574.hybridfilexfer.core.CheckpointEntry;
@@ -72,7 +73,7 @@ public class HFXServer extends HFXService {
         while (true) {
             //协议判断
             java.nio.channels.SocketChannel socketChannel = serverSocketChannel.accept();
-            //以控制通道对端地址作为对端标识（断点续传检查点键）
+            //以控制通道对端地址作为对端标识的兜底（握手时会被稳定设备标识覆盖）
             peerId = ((InetSocketAddress) socketChannel.getRemoteAddress()).getAddress().getHostAddress();
             ctChannel = new DataByteChannel(socketChannel);
             byte[] headerBytes = HFXServer.CLIENT_HEADER.getBytes(StandardCharsets.UTF_8);
@@ -93,6 +94,9 @@ public class HFXServer extends HFXService {
                 continue;
             }
             ctChannel.writeBoolean(true);//版本正确匹配
+            //握手互换稳定设备标识（取代 IP）：换连接方式或 IP 变更后断点续传的检查点仍能命中
+            ctChannel.writeUTF(deviceId());
+            peerId = ctChannel.readUTF();
             ctChannel.writeInt(interfaceList.size());//网卡IP数量
             for (ServerNetInterface netInterface : interfaceList) {
                 byte[] address = netInterface.address.getAddress();
@@ -159,6 +163,8 @@ public class HFXServer extends HFXService {
         this.remoteFileSystem = ctChannel.readInt();
         //读取对方设定的主目录
         this.remoteHomeDir = ctChannel.readUTF();
+        //读取对方是否请求传输完成后执行 MD5 校验
+        this.peerRequestsChecksum = ctChannel.readBoolean();
         this.ctChannel = ctChannel;
         this.connections = connections;
         callback.onConnectSuccess();
@@ -323,6 +329,12 @@ public class HFXServer extends HFXService {
         return new AndroidCheckpointManager(context);
     }
 
+    /** 本机稳定设备标识：持久化在 SharedPreferences，首次使用时生成（不能用 IP：换连接方式即失效） */
+    @Override
+    protected String deviceId() {
+        return Config.getInstance(context).getDeviceId();
+    }
+
     @Override
     protected WriteFileCall createWriteFileCall(LinkedBlockingDeque<ByteBuffer> buffers, int dequeCount, Map<String, Long> checkpoints) {
         return new DroidWriteFileCall(buffers, dequeCount, ioService, checkpoints, getCheckpointManager(), peerId);
@@ -348,8 +360,10 @@ public class HFXServer extends HFXService {
         if (pfd == null) {
             return null;
         }
-        try (FileInputStream fis = new FileInputStream(pfd.getFileDescriptor())) {
-            return Utils.md5Hex(fis);
+        try {
+            //fd 的所有权属于 ParcelFileDescriptor，只由它关闭；
+            //若再用 FileInputStream 的 try-with-resources 关一次同一个 fd，第二次关闭会落在已被复用的 fd 上
+            return Utils.md5Hex(new FileInputStream(pfd.getFileDescriptor()));
         } finally {
             pfd.close();
         }

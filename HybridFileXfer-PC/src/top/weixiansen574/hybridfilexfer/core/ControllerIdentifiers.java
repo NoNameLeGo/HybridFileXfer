@@ -11,6 +11,8 @@ public class ControllerIdentifiers {
     public static final short CHECKPOINT_REQUEST = 14;
     /** 文件校验：发起方向对方请求计算文件 MD5（后随传输路径清单，对方回传 path→md5 表） */
     public static final short FILE_CHECKSUM_REQUEST = 16;
+    /** 文件校验：发起方向请求校验的一侧回传结果（boolean 通过 + int 校验失败的文件数） */
+    public static final short FILE_CHECKSUM_RESULT = 17;
 
     //就让魔法打败魔法吧！
     /**

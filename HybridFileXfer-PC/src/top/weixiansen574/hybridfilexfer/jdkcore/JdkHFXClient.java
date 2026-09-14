@@ -12,9 +12,13 @@ import top.weixiansen574.hybridfilexfer.core.bean.RemoteFile;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.LinkedBlockingDeque;
 
 public class JdkHFXClient extends HFXClient {
@@ -68,6 +72,34 @@ public class JdkHFXClient extends HFXClient {
     @Override
     protected CheckpointManager createCheckpointManager() {
         return new JdkCheckpointManager();
+    }
+
+    /**
+     * 本机稳定设备标识：持久化在 {@code ~/.hybridfilexfer/device.id}（与检查点同目录），首次使用时生成。
+     * <p>用文件而非 IP：同一台电脑走 ADB（127.0.0.1）或 WLAN 时应视为同一对端，
+     * 否则换一种连接方式就丢失全部续传进度。写失败时退回主机名。</p>
+     */
+    @Override
+    protected String deviceId() {
+        File idFile = new File(new File(System.getProperty("user.home"), ".hybridfilexfer"), "device.id");
+        try {
+            if (idFile.isFile()) {
+                String id = new String(Files.readAllBytes(idFile.toPath()), StandardCharsets.UTF_8).trim();
+                if (!id.isEmpty()) {
+                    return id;
+                }
+            }
+            idFile.getParentFile().mkdirs();
+            String id = UUID.randomUUID().toString();
+            Files.write(idFile.toPath(), id.getBytes(StandardCharsets.UTF_8));
+            return id;
+        } catch (IOException e) {
+            try {
+                return InetAddress.getLocalHost().getHostName();
+            } catch (Exception ignored) {
+                return "unknown-device";
+            }
+        }
     }
 
     @Override

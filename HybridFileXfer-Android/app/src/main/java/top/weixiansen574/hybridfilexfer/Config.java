@@ -3,6 +3,8 @@ package top.weixiansen574.hybridfilexfer;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+import java.util.UUID;
+
 public class Config {
     public static final int MODE_NORMAL = 0;
     public static final int MODE_ROOT = 1;
@@ -62,5 +64,18 @@ public class Config {
 
     public String getConnectServerControllerIp(){
         return preferences.getString("connect_server_controller_ip","");
+    }
+
+    /**
+     * 本机稳定设备标识：握手时提供给对端作为断点续传检查点的对端键，首次使用时生成并持久化。
+     * <p>不能用 IP：同一设备换连接方式（USB/WLAN）或 IP 变更后会被当成新对端，检查点全部失效。</p>
+     */
+    public String getDeviceId(){
+        String id = preferences.getString("device_id", null);
+        if (id == null || id.isEmpty()){
+            id = UUID.randomUUID().toString();
+            preferences.edit().putString("device_id", id).apply();
+        }
+        return id;
     }
 }

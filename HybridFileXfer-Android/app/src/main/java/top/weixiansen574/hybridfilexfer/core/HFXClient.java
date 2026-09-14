@@ -32,8 +32,6 @@ public abstract class HFXClient extends HFXService {
 
     public boolean connect(ConnectServerCallback callback) throws IOException {
         try {
-            //以服务器地址作为对端标识（断点续传检查点键）
-            peerId = serverControllerAddress;
             //System.out.println("正在连接控制通道：" + serverControllerAddress);
             callback.onConnectingControlChannel(serverControllerAddress, serverPort);
             ctChannel = new DataByteChannel(SocketChannel
@@ -47,6 +45,9 @@ public abstract class HFXClient extends HFXService {
                 ctChannel.close();
                 return false;
             }
+            //握手互换稳定设备标识（取代 IP）：换连接方式或 IP 变更后断点续传的检查点仍能命中
+            ctChannel.writeUTF(deviceId());
+            peerId = ctChannel.readUTF();
         } catch (IOException e) {
             //System.out.println("控制通道连接到手机失败，请检查手机的服务端是否启动？");
             callback.onConnectControlFailed();
@@ -138,6 +139,9 @@ public abstract class HFXClient extends HFXService {
         ctChannel.writeInt(Directory.getCurrentFileSystem());
         //返回主路径信息给对方
         ctChannel.writeUTF(homeDir);
+        //告知服务端：本轮连接是否请求传输完成后执行 MD5 校验
+        //（服务端无控制通道读循环，只能由它发起校验、本端在控制循环中应答并收取结果）
+        ctChannel.writeBoolean(requestChecksumOnTransfer);
         //System.out.println("传输通道已全部连接完成");
         List<String> channelNames = new ArrayList<>(connections.size());
         for (TransferConnection connection : connections) {
@@ -175,6 +179,10 @@ public abstract class HFXClient extends HFXService {
                 case ControllerIdentifiers.FILE_CHECKSUM_REQUEST:
                     //传输完成后的可选 MD5 校验：计算本机副本并回传
                     handleFileChecksumRequest();
+                    break;
+                case ControllerIdentifiers.FILE_CHECKSUM_RESULT:
+                    //校验发起方回传的结果（仅本端请求过校验时才会收到）
+                    handleFileChecksumResult(callBack);
                     break;
                 case ControllerIdentifiers.SHUTDOWN:
                     handleShutdown();

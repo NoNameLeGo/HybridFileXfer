@@ -425,8 +425,16 @@ public class TransferActivity extends AppCompatActivity {
         public void onComplete(boolean isUpload, long traffic, long time) {
             //文件传输完成，平均总速度：
             transferDialog.complete(isUpload, traffic, time);
-            //传输完成后的可选项：MD5 文件校验
-            transferDialog.enableVerify(v -> verify());
+            HFXServer server = HFXServer.instance;
+            if (server != null && server.isPeerRequestsChecksum()) {
+                //对端已请求传输后校验（PC 的 -x/--checksum）：结果返回前锁住对话框，
+                //避免校验进行中再发起新传输（两条线程同时读写控制通道会串流）
+                transferDialog.setTitle("正在校验文件…");
+                transferDialog.lockButton("校验中…");
+            } else {
+                //传输完成后的可选项：MD5 文件校验
+                transferDialog.enableVerify(v -> verify());
+            }
             adapter.refresh();
         }
 
@@ -437,19 +445,28 @@ public class TransferActivity extends AppCompatActivity {
                 return;
             }
             transferDialog.setTitle("正在校验文件…");
-            transferDialog.setButton("校验中…", null);
+            transferDialog.lockButton("校验中…");
             new VerifyChecksumTask(this, server).execute();
         }
 
         @Override
-        public void onFileChecksumComplete(boolean passed, int mismatchCount) {
+        public void onFileChecksumComplete(boolean passed, List<String> mismatchFiles) {
             if (passed) {
                 transferDialog.setTitle("MD5 校验通过 ✓");
             } else {
-                transferDialog.setTitle("MD5 校验失败：" + mismatchCount + " 个文件 ✗");
+                transferDialog.setTitle("MD5 校验失败：" + mismatchFiles.size() + " 个文件 ✗");
+                //列出具体文件名，用户才知道该重传哪个（最多列 20 个）
+                StringBuilder detail = new StringBuilder();
+                int shown = Math.min(mismatchFiles.size(), 20);
+                for (int i = 0; i < shown; i++) {
+                    detail.append(mismatchFiles.get(i)).append('\n');
+                }
+                if (mismatchFiles.size() > shown) {
+                    detail.append("…（其余 ").append(mismatchFiles.size() - shown).append(" 个省略）");
+                }
                 new AlertDialog.Builder(context)
                         .setTitle("MD5 校验失败")
-                        .setMessage(mismatchCount + " 个文件校验失败（内容不一致或文件缺失），建议重新传输。")
+                        .setMessage("以下文件内容不一致或缺失，建议重新传输：\n\n" + detail)
                         .setPositiveButton(R.string.ok, null)
                         .show();
             }

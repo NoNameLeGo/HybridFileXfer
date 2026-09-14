@@ -51,9 +51,9 @@ public interface TransferFileCallback {
      * 传输完成后的可选 MD5 文件校验结果。
      *
      * @param passed        是否全部文件校验通过
-     * @param mismatchCount 校验失败的文件数（文件缺失/内容不一致均计入）
+     * @param mismatchFiles 校验失败的文件（传输路径）；文件缺失/内容不一致均计入
      */
-    default void onFileChecksumComplete(boolean passed, int mismatchCount) {
+    default void onFileChecksumComplete(boolean passed, List<String> mismatchFiles) {
     }
 
 }

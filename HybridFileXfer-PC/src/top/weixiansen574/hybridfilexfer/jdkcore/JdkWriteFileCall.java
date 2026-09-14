@@ -39,9 +39,9 @@ public class JdkWriteFileCall extends WriteFileCall {
     @Override
     protected FileChannel createAndOpenFile(String path, long length) throws Exception {
         file = new RandomAccessFile(path, "rw");
-        //不做 setLength 预分配：文件大小自然反映"已写到的位置"，
-        //断点续传时 WriteFileCall 依据 channel.size() 判断是否需要从头写；
-        //若目标文件不存在（用户删除），size 为 0 会触发从头传输，避免写出空洞文件。
+        //不在这里预分配：文件大小自然反映"已写到的位置"，续传时残留的前缀即上次已落盘的数据。
+        //长度处理统一由 WriteFileCall 负责：打开后按 totalSize 做只缩不扩的 truncate（清掉旧文件尾巴），
+        //并在首次打开时依据检查点决定跳过多少；目标文件被删除时握手阶段已判定检查点无效、全量重传
         channel = file.getChannel();
         return channel;
     }

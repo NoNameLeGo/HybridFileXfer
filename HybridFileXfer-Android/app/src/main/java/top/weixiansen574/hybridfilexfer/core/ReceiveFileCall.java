@@ -48,6 +48,11 @@ public class ReceiveFileCall implements Callable<Void> {
                         long totalSize = channel.readLong();
                         int index = channel.readInt();
                         int length = channel.readInt();
+                        //块长度来自对端，越界会在 buffer.limit() 抛 IllegalArgumentException
+                        //并绕过 IOException 处理，故先校验（块大小恒定，上限即缓冲区块大小）
+                        if (length < 0 || length > FileBlock.BLOCK_SIZE) {
+                            throw new IOException("invalid block length: " + length + " (" + path + ")");
+                        }
                         callback.onFileDownloading(iName, path,
                                 index * (long) FileBlock.BLOCK_SIZE + length,
                                 totalSize);
@@ -62,7 +67,6 @@ public class ReceiveFileCall implements Callable<Void> {
                             }
                             connection.addDownloadedBytes(read);
                         }
-                        channel.readFully(buffer);
                         writeFileCall.putBlock(new FileBlock(true, fileIndex, path, lastModified, totalSize, index, buffer), tIndex);
                         break;
                     }

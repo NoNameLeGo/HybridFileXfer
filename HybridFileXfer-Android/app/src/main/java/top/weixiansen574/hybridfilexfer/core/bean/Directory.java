@@ -7,6 +7,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
 
+import top.weixiansen574.hybridfilexfer.core.FileSanitizer;
+
 //声明：大部分代码由ChatGPT生成
 
 public class Directory {
@@ -91,7 +93,8 @@ public class Directory {
      * <ol>
      *   <li>根据本地系统类型确定本地分隔符，远程系统确定远程分隔符。</li>
      *   <li>计算文件相对于本地文件夹（this.path）的相对路径。</li>
-     *   <li>将相对路径按本地分隔符拆分成各个段，然后对每个段中的非法字符（[\\ : * ? " < > |]）替换为下划线 "_"。</li>
+     *   <li>将相对路径按本地分隔符拆分成各个段，然后对每个段做文件名清洗
+     *       （{@link FileSanitizer#sanitizeSegment}：非法字符、尾部点/空格、保留设备名）。</li>
      *   <li>最后将远程文件夹（remote.path）与替换后的相对路径段用远程分隔符拼接生成结果。</li>
      * </ol>
      *
@@ -134,11 +137,11 @@ public class Directory {
         // 将相对路径按本地分隔符拆分成各个段（注意Linux下只用 "/" 拆分）
         String[] segments = relativePath.split(Pattern.quote(localSep));
         List<String> sanitizedSegments = new ArrayList<>();
-        // 对每个段替换非法字符：\ : * ? " < > |
+        // 逐段清洗成对端文件系统上可创建的名字：非法字符、尾部点/空格、保留设备名、超长段
+        // （传输路径同时是断点续传检查点的键，必须与磁盘上的真实文件名严格一致）
         for (String seg : segments) {
             if (seg.isEmpty()) continue;
-            String sanitized = seg.replaceAll("[\\\\:*?\"<>|]", "_");
-            sanitizedSegments.add(sanitized);
+            sanitizedSegments.add(FileSanitizer.sanitizeSegment(seg, remote.fileSystem));
         }
         // 用远程系统的分隔符拼接
         String sanitizedRelative = String.join(remoteSep, sanitizedSegments);

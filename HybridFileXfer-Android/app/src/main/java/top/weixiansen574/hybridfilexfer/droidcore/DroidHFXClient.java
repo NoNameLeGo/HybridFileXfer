@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingDeque;
 
+import top.weixiansen574.hybridfilexfer.Config;
 import top.weixiansen574.hybridfilexfer.NativeMemory;
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
 import top.weixiansen574.hybridfilexfer.core.CheckpointEntry;
@@ -70,6 +71,12 @@ public class DroidHFXClient extends HFXClient {
     @Override
     protected CheckpointManager createCheckpointManager() {
         return new AndroidCheckpointManager(context);
+    }
+
+    /** 本机稳定设备标识：持久化在 SharedPreferences，首次使用时生成（不能用 IP：换连接方式即失效） */
+    @Override
+    protected String deviceId() {
+        return Config.getInstance(context).getDeviceId();
     }
 
     @Override

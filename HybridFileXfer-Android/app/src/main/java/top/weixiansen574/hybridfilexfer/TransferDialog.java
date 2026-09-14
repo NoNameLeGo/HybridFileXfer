@@ -138,7 +138,18 @@ public class TransferDialog {
     public void setButton(String text, View.OnClickListener onClickListener) {
         Button button = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
         button.setText(text);
+        button.setEnabled(true);
         button.setOnClickListener(onClickListener);
+    }
+
+    /**
+     * 锁定底部按钮（校验进行中）：不可点击，避免用户在校验期间发起新传输。
+     * <p>校验结束后用 {@link #setButton} 或 {@link #enableVerify} 恢复可点。</p>
+     */
+    public void lockButton(String text) {
+        Button button = dialog.getButton(DialogInterface.BUTTON_POSITIVE);
+        button.setText(text);
+        button.setEnabled(false);
     }
 
     /**
