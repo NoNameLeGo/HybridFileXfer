@@ -29,9 +29,12 @@
 
 **未验证（接手第一件事）**：
 
-1. `droidcore/`（Android 平台层）**从未编译过** —— 本机无 Android SDK。已人工核对：
-   `Config` 的 import 已补、`deviceId()` 三处覆写签名一致、无遗留旧签名调用。请推 CI 或本地跑
-   `./gradlew assembleDebug` 确认。
+1. `droidcore/`（Android 平台层）本地无法验证。
+   **Android 侧一律不要本地构建**：不装 SDK/NDK/Gradle、不产 APK，全部交给 GitHub Actions
+   （push 自动触发 `build.yml`，手工需要时用 `gh run list` / Actions 页面看结果）。
+   本地唯一允许的是**不依赖 SDK 的 `core/` javac 类型检查**（仅编译 `core/**` + `nio/**` 到临时目录，
+   不需要 ANDROID_HOME，也不产生任何 Android 产物）。
+   已做的人工核对：`Config` 的 import 已补、`deviceId()` 三处覆写签名一致、无遗留旧签名调用。
 2. **没有跑过双端真机传输**。需要实测的场景：
    - 传文件夹（握手清单 / 进度分母 / 子文件续传与校验）；
    - 传输中途拔线 → 重连续传（水位线不得越空洞，进度从断点起算）；

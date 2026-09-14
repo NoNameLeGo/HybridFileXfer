@@ -304,7 +304,8 @@ Android 侧泄漏跨进程 `ParcelFileDescriptor`，且最后一段被节流的�
   场景5 文件名清洗 11 项断言 + 去重 3 项断言（Windows / Linux 分开断言）
   场景6 看门狗：卡死时读线程 500ms 内解除阻塞且通道已关闭；持续 touch 时不误杀
 反证：把其中一项预期改错后自检退出码 1 并打印 FAIL → 断言确实有效
-PC 全量 javac 退出码 0；Android core 单独 javac 退出码 0；core/ 双端 diff 一致
+PC 全量 javac 退出码 0；Android core 单独 javac 退出码 0（仅类型检查：不装 SDK、不跑 Gradle、不产 APK）；core/ 双端 diff 一致
+Android 完整构建（含 droidcore）由 push 触发的 GitHub Actions `build.yml` 验证，本次已通过（2m48s）
 ```
 
 ## 仍未修（有意保留）

@@ -146,6 +146,10 @@ HybridFileXfer/
 
 原因：本地没有完整的 SDK/NDK/CMake 环境与签名密钥，产物不可用于交付；CI 环境统一且配置了签名 secrets。需要 APK 时到 Actions 运行结果或 Release 页面下载。
 
+补充：**也不要在本地安装 Android 构建环境（SDK/NDK/Gradle）**，磁盘空间有限。
+本地唯一允许的 Android 相关校验是**不依赖 SDK 的 `core/` javac 类型检查**（见下方「后续改动必须遵守的约束」第 1 条），
+它只编译 `core/**` + `nio/**` 到临时目录，不产生任何 Android 产物。
+
 ### PC 端
 
 PC 端为 IntelliJ IDEA 项目（`.iml`），源码在 `src/`，编译输出在 `out/`。
