@@ -1,0 +1,15 @@
+# PC 端构建产物（jar 由 CI/本地临时生成，不入库；libs/ 下的依赖仍需入库）
+HybridFileXfer-PC/out/
+HybridFileXfer-PC/HybridFileXfer.jar
+HybridFileXfer-PC/sources.txt
+# 本地编译自检输出（见 HybridFileXfer-PC/test/WatermarkProbe.java）
+HybridFileXfer-PC/.verify/
+
+# 编译产物与编辑器备份
+*.class
+*~
+*.bak
+
+# 系统
+.DS_Store
+Thumbs.db
