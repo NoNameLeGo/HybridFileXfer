@@ -5,6 +5,11 @@ HybridFileXfer-PC/sources.txt
 # 本地编译自检输出（见 HybridFileXfer-PC/test/WatermarkProbe.java）
 HybridFileXfer-PC/.verify/
 
+# 发布签名：release.yml 的「Build & sign」会解码出 keystore.jks，本地手跑同样步骤也会留下它
+*.jks
+*.keystore
+keystore.jks
+
 # 编译产物与编辑器备份
 *.class
 *~

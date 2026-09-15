@@ -15,6 +15,12 @@
 **这是破坏性协议变更：`VERSION_CODE` = 303，手机端必须同步升级 APK**，否则连接时会明确报版本不一致
 （旧版行为是控制通道错位死锁）。
 
+> ⚠️ **这些都还没发版**：最新 Release 是 `v3.0.3`（协议 **301**，等于提交 `5e33b0c`）。
+> `v3.0.3..HEAD` 的 8 个提交（含断点续传加固 82f7d03、#113/#84）只存在于源码里，
+> 因此 Release 里的 APK 与当前源码构建的 PC jar **无法互连**；
+> 且已发布的 v3.0.1/v3.0.3 带有水位线 bug（可能静默丢块）。
+> 要发布需打 `v*` tag 或手动触发 `release.yml`。
+
 补充修复（第四轮之后，均不在 `core/`，无需双端同步）：
 
 - **#113 长文件名崩溃**：`IOServiceImpl.openReadableFile` / `createAndOpenWriteableFile` 失败返回 null，
@@ -60,7 +66,19 @@
 ## 三、仍未做（有意保留）
 
 - P2-6 发送方进度语义（「已读入队列」而非「已发出」，缓冲池有界故滞后有界）；
+- P2-4 校验状态只保留最近一次传输（`HFXService.receiverSide` / `transferToSource`），连传两批只能校验后一批；
+- P2-8 `core/` 双端逐字节镜像（各约 2600 行），每处修改要改两遍（P15 抽模块才能解决）；
 - 校验无逐文件进度（大文件时对话框只有「正在校验文件…」）；
 - 服务端无控制通道读循环（P12 双向调度），客户端发起的能力只能挂在现有握手边上；
+- `release.yml` 的 `pc-linux` 仍用 `curl` 从 Maven Central 现下 annotations，而 `pc-windows` 用仓库里 vendor 的 `libs/`；
+- 发版时 `-v` 的版本号（`messages_*.properties`，5 个语言文件）需**手工**改，`release.yml` 只自动同步 Android 的 `versionName`（可改成同样 sed 一次）；
 - P10（日志框架）、P11（暂停/取消、跳过重复文件、传输历史）、P12（PC GUI、TF 卡）、
   P13（分块可配置、双轨性能）、P15（抽模块、Gradle、正式单元测试）。
+
+## 四、已废弃但仍留在仓库里的东西
+
+- `HybridFileXfer-PC/start.c` + `start.exe`（C 启动器）与 `HybridFileXfer-PC/HybridFileXferLauncher.exe`、
+  `HybridFileXferLauncher-linux-x64`：交互逻辑已在 `5e33b0c` 移植进 `HybridFileXferLauncher/Program.cs`，
+  这 4 个文件（约 4.1 MB）不再被 CI、脚本或文档引用。删不删待定。
+- `HybridFileXfer-Android/app/build.gradle` 的 `versionName "3.0.0 - beta"` 仅为本地构建默认值，
+  发版时由 `release.yml` 按 tag 覆盖。

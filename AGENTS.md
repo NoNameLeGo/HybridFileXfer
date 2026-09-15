@@ -52,9 +52,14 @@ java -jar HybridFileXfer.jar -c adb -s abcd1234
 # 局域网直连
 java -jar HybridFileXfer.jar -c 192.168.1.114 -d D:\Transfer\Files
 
+# 传完做一次 MD5 校验（默认关闭）
+java -jar HybridFileXfer.jar -c 192.168.1.114 -x
+
 # 查看帮助
 java -jar HybridFileXfer.jar -h
 ```
+
+手机端 APK 需与电脑端同版本（协议 303，旧版会直接报版本不一致）。
 
 ---
 
@@ -72,18 +77,29 @@ HybridFileXfer/
 │   │       │   ├── DroidHFXClient.java     ← 客户端
 │   │       │   ├── DroidReadFileCall.java ← Android 文件读取
 │   │       │   └── DroidWriteFileCall.java← Android 文件写入
-│   │       ├── core/          ← 传输核心（跨平台抽象）
+│   │       ├── core/          ← 传输核心（跨平台抽象，两侧逐字节镜像）
 │   │       │   ├── HFXService.java         ← 传输编排（sendFiles / receiveFiles）
-│   │       │   ├── ReadFileCall.java       ← 文件读取 + 分块
-│   │       │   ├── WriteFileCall.java      ← 文件写入（排序 + 续写）
+│   │       │   ├── HFXClient.java          ← 客户端握手 + 控制循环
+│   │       │   ├── ReadFileCall.java       ← 文件读取 + 分块（断点处跳过）
+│   │       │   ├── WriteFileCall.java      ← 文件写入（排序 + 续写 + 水位线 + 每块存档）
 │   │       │   ├── SendFileCall.java       ← 发送线程
 │   │       │   ├── ReceiveFileCall.java    ← 接收线程
+│   │       │   ├── CheckpointManager.java  ← 检查点读写接口（平台层实现）
+│   │       │   ├── CheckpointEntry.java    ← 检查点记录（completedBytes）
+│   │       │   ├── FileSanitizer.java     ← 文件名清洗 + 传输路径去重
+│   │       │   ├── ReadWatchdog.java       ← 控制通道读超时（SO_TIMEOUT 对 NIO 无效）
+│   │       │   ├── ProgressSource.java     ← 进度源
+│   │       │   ├── SpeedMonitorThread.java ← 速度/进度上报
 │   │       │   ├── FileBlock.java          ← 1MB 分块数据结构
 │   │       │   ├── TransferConnection.java ← 单条传输通道
 │   │       │   ├── TransferIdentifiers.java← 块级协议常量
-│   │       │   └── ControllerIdentifiers.java← 控制器协议常量
+│   │       │   ├── ControllerIdentifiers.java← 控制器协议常量
+│   │       │   ├── Utils.java              ← md5Hex 等
+│   │       │   ├── bean/                   ← Directory / RemoteFile / ServerNetInterface / TrafficInfo
+│   │       │   └── callback/               ← ClientCallBack / ConnectServerCallback / TransferFileCallback
 │   │       ├── tasks/         ← Android 后台任务封装
 │   │       ├── listadapter/   ← 文件列表 Adapter
+│   │       ├── ConfigDB.java  ← SQLite（书签、检查点存储）
 │   │       └── IOServiceImpl.java ← AIDL Service 实现
 │   └── ...
 ├── HybridFileXfer-PC/         ← PC 端（Java 应用）
@@ -91,14 +107,17 @@ HybridFileXfer/
 │   │   ├── jdkcore/           ← JDK 平台特化实现
 │   │   │   ├── JdkHFXClient.java
 │   │   │   ├── JdkReadFileCall.java
-│   │   │   └── JdkWriteFileCall.java
+│   │   │   ├── JdkWriteFileCall.java
+│   │   │   └── JdkCheckpointManager.java  ← 检查点存 JSON Lines（7 天清理）
 │   │   ├── core/              ← 传输核心（与 Android 共享抽象）
 │   │   └── Main.java          ← 入口 + 命令行解析
-│   ├── out/                  ← 编译输出
-│   └── adb.exe               ← ADB 工具（用于 USB 转发）
-├── HybridFileXferLauncher/    ← 启动器
-├── script/                   ← 辅助脚本
-└── README.md                 ← 完整文档
+│   ├── test/                  ← 无框架自检（WatermarkProbe / BufferOomProbe）
+│   ├── libs/                  ← vendor 的 annotations jar
+│   ├── out/                   ← 编译输出（已 gitignore）
+│   └── adb.exe                ← ADB 工具（release 打包要用）
+├── HybridFileXferLauncher/    ← .NET 启动器（CI 打成 start.exe）
+├── script/                    ← 辅助脚本（start-by-adb.bat / start-by-network.bat / USB-forward*.bat）
+└── README.md                  ← 完整文档
 ```
 
 ### 核心传输流程
@@ -131,7 +150,11 @@ HybridFileXfer/
 | `ControllerIdentifiers.FILE_CHECKSUM_RESULT` | 17 | 文件校验：发起方回传校验结果 |
 | `TransferIdentifiers.FILE` | 0 | 文件数据块 |
 | `TransferIdentifiers.FOLDER` | 1 | 文件夹标记 |
+| `TransferIdentifiers.FILE_SLICE` | 2 | 文件切片（预留） |
 | `TransferIdentifiers.EOF` | 3 | 传输结束 |
+| `TransferIdentifiers.END_OF_INTERRUPTED` | 4 | 中断结束 |
+| `TransferIdentifiers.END_OF_READ_ERROR` | 5 | 读失败结束 |
+| `TransferIdentifiers.END_OF_WRITE_ERROR` | 6 | 写失败结束 |
 
 ---
 
@@ -157,11 +180,14 @@ PC 端为 IntelliJ IDEA 项目（`.iml`），源码在 `src/`，编译输出在 
 外部依赖仅一个：jetbrains annotations，已 vendor 在 `libs/annotations-24.0.1.jar`（约 30KB，Apache-2.0，仅编译期使用，不进入运行时）。本地与 CI 均无需联网下载；IntelliJ 内编译仍使用 IDE 自己配置的同一依赖。
 
 **CI 覆盖**：`build.yml` 的 `pc` 任务在**每次 push / PR** 上都会跑
-「`core/` 与 `nio/` 双端逐字节一致 + javac 全量 + jar 冒烟 + 自检」，
+「`core/` 与 `nio/` 双端逐字节一致 + javac 全量 + jar 冒烟 + 两个自检」，
 所以 PC 端不再依赖“记得本地跑”。本地跑同样的命令只是为了**反馈更快**（约 15s vs 一两分钟）。
 
+**发布注意**：`-v` 里的版本号（`src/messages_*.properties` 的 `version=`，5 个语言文件）
+**不会**被 `release.yml` 自动同步（那里只 sed 了 Android 的 `versionName`），发版前需手工改。
+
 ```bash
-# 手动编译（与 .github/workflows/release.yml 的命令保持一致）
+# 手动编译（与 CI 命令一致，只是输出目录不同：本地 out/、build.yml 用 out/ci、release.yml 用 out/pc）
 find src -name '*.java' > sources.txt
 javac -encoding UTF-8 -cp libs/annotations-24.0.1.jar -d out @sources.txt
 cp src/messages_*.properties out/
@@ -192,7 +218,13 @@ java -XX:MaxDirectMemorySize=16m -cp "libs/annotations-24.0.1.jar;.verify" Buffe
 
 ### 概述
 
-当前版本**不支持断点续传**，**无文件校验**，**无总体进度显示**，且存在多项编码和用户体验问题。
+断点续传、传输后 MD5 校验、文件名清洗、总体进度显示**均已实现**（协议 `VERSION_CODE` = 303，
+手机端 APK 必须同步升级）。当前在做的是 P10 以后的基础设施与体验项，见下方「实现进度」。
+
+注意：这些改动**尚未发版**——最新 Release 是 `v3.0.3`（协议 301，对应提交 `5e33b0c`），
+`v3.0.3..HEAD` 的提交只在源码里，所以 Release 的 APK 与本地构建的 PC jar 无法互连。
+
+遗留的主要短板（有意保留）：P2-6 发送方进度语义、校验无逐文件进度、服务端无控制通道读循环（P12）。
 
 ### 完整规划
 
@@ -239,7 +271,7 @@ java -XX:MaxDirectMemorySize=16m -cp "libs/annotations-24.0.1.jar;.verify" Buffe
 | P4 | FileSanitizer：文件名非法字符清洗 | ✅ 已完成（新增 `core/FileSanitizer`：非法字符/控制字符、Windows 尾部点与空格、保留设备名 CON/NUL/COM1…、超长段截断；并在握手前对传输路径去重） |
 | P5 | HFXService：checkpoint + checksum 握手集成 | ◑ 部分完成（checkpoint 握手 + 磁盘有效性校验；MD5 校验以"传输完成后可选"形式实现：FILE_CHECKSUM_REQUEST=16，服务端发起、客户端主循环响应，双方各算本地副本 MD5 对比；客户端可用 `-x/--checksum` 请求校验，结果经 FILE_CHECKSUM_RESULT=17 回传） |
 | P6 | IIOService.aidl + IOServiceImpl | ◑ 部分完成（新增 getFileSize=14 + 打开文件不再截断；长度处理统一由 `WriteFileCall` 做只缩不扩的 `truncate`；createAndOpenWriteableFile 带 skipBlocks 未做） |
-| P7 | HFXClient / HFXServer peerId 传递 | ✅ 已完成（客户端=服务器地址，服务端=控制通道对端 IP） |
+| P7 | HFXClient / HFXServer peerId 传递 | ✅ 已完成（双方在握手中互换稳定设备标识 `deviceId()` 作为 peerId；**不能用 IP**，见约束 5） |
 | P8 | TransferFileCallback 新增回调 + TransferDialog 进度条 | ✅ 已完成（onTransferStarted / onOverallProgress 进度回调 + onFileChecksumComplete 校验回调 + 进度条 UI + "MD5 校验"按钮） |
 | P9 | Main / ClientActivity / TransferActivity UI 集成 | ✅ 已完成（PC 单行进度刷新；Android TransferDialog 与 ClientActivity 显示百分比/字节） |
 | P10 | 日志框架 + 异常处理统一 | ⬜ 待开始 |
