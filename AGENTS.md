@@ -169,10 +169,12 @@ cp src/messages_*.properties out/
 # 打 jar（必须引用 src/META-INF/MANIFEST.MF，缺 Main-Class 会让 java -jar 启动即退）
 jar cvfm HybridFileXfer.jar src/META-INF/MANIFEST.MF -C out .
 
-# 断点续传水位线的回归自检（全项目唯一测试，无框架，通过时退出码 0；Windows 用 ; 分隔 classpath）
+# 回归自检（无框架，通过时退出码 0；Windows 用 ; 分隔 classpath）
 javac -encoding UTF-8 -cp libs/annotations-24.0.1.jar -d .verify $(find src -name '*.java')
-javac -encoding UTF-8 -cp "libs/annotations-24.0.1.jar;.verify" -d .verify test/WatermarkProbe.java
+javac -encoding UTF-8 -cp "libs/annotations-24.0.1.jar;.verify" -d .verify test/WatermarkProbe.java test/BufferOomProbe.java
 java -cp "libs/annotations-24.0.1.jar;.verify" WatermarkProbe
+# 必须限死堆外内存，否则「分配失败」这条路径不会触发
+java -XX:MaxDirectMemorySize=16m -cp "libs/annotations-24.0.1.jar;.verify" BufferOomProbe
 ```
 
 ---
@@ -198,19 +200,33 @@ java -cp "libs/annotations-24.0.1.jar;.verify" WatermarkProbe
 
 ### Issue 驱动
 
-| Issue | 标题 | 关联阶段 |
-|-------|------|----------|
-| #43 | 断点续传 | P0-P3, P5-P7 |
-| #109 | 视频帧错乱 | P2（写入验证） |
-| #5 / #115 | md5/sha256 校验 | P2, P3, P5 |
-| #34 / #35 | 非法文件名崩溃 | P4 |
-| #8 / #11 | 传输中断崩溃 | P0-P9（天然覆盖） |
-| #71 | 双轨速度反而更慢 | P13 |
-| #38 | 分块大小可配置 | P13 |
-| #53 | 拖拽多选 | P14 |
-| #74 | 省电提醒 | P14 |
-| #85 | PC GUI | P12 |
-| #70 | TF 卡访问 | P12 |
+> 上游仓库：[weixiansen574/HybridFileXfer](https://github.com/weixiansen574/HybridFileXfer)
+> （`README.md:89` 里的 `HybirdFileXfer` 是上游笔误）。**本仓库（fork）关闭了 Issues**，
+> 所以 issue 只能在上游读写，`gh issue list -R weixiansen574/HybridFileXfer`。
+
+| Issue | 标题 | 关联阶段 | 状态 |
+|-------|------|----------|------|
+| #43 | 断点续传 | P0-P3, P5-P7 | 已实现 |
+| #5 / #115 | md5/sha256 校验 | P2, P3, P5 | 已实现（`-x/--checksum`，默认关闭） |
+| #34 / #35 | 非法文件名（`?` 等）导致 Windows 收端崩溃 | P4 | 已修（`FileSanitizer`） |
+| #8 / #11 / #73 / #91 / #100 | 传输中断 / 断连掉速 / 大文件 EOF | P0-P9 | 续传与校验覆盖 |
+| #71 | 双轨速度反而更慢 | P13 | 未做 |
+| #38 | 分块大小可配置 | P13 | 未做 |
+| #53 | 拖拽（区间）多选 | P14 | 未做 |
+| #74 / #93 | 锁屏 / 旋转屏幕掉后台 | P14 | 未做 |
+| #70 | TF 卡访问 | P12 | 未做 |
+| #36 | 跳过大小相同的同名文件 | P11 | 未做 |
+| #6 | 传输时间与传输记录 | P11 | 未做 |
+| #113 | 长文件名崩溃 + 不能跳过重复文件 | — | 长文件名已修（`pfd` 判空改抛 `IOException`）；跳过重复文件仍归 P11 |
+| #84 | 缓冲区块数过大 → `OutOfMemoryError: Direct buffer memory` | — | 已修（`JdkHFXClient.createBuffer` 分配失败返回 null，走既有 `onOOM` 提示） |
+| #90 | adb 5740 端口硬编码（被 Hyper-V/WSL 占用即失败） | P12 | 未做 |
+| #106 | 用系统 adb 替代自带 `adb.exe` 提速 | — | 未做 |
+| #114 | 安全披露：任意文件读写 | — | 未定论（上游作者回「不用担心」，对方未给细节） |
+| ~~#109~~ | ~~视频帧错乱~~ | ~~P2（写入验证）~~ | **已关闭且是误报**：发帖人自述为手机可变帧率导致 PR 解析错误，MD5 校验全部通过。不要再拿它当 P2「写入验证」的依据 |
+| ~~#85~~ | ~~PC GUI~~ | ~~P12~~ | **映射错误**：#85 是「USB ADB 连接不上」求助帖，与 PC GUI 无关 |
+
+其余开放 issue（`#2` `#4` `#9` `#10` `#12` `#15` `#18` `#19` `#21` `#25` `#27` `#29` `#32` `#42` `#63` `#64` `#68` `#102` `#104` `#107` `#111` `#112`）
+为环境适配 / 长期构想 / 使用求助，未纳入规划。
 
 ### 实现进度
 
@@ -231,7 +247,7 @@ java -cp "libs/annotations-24.0.1.jar;.verify" WatermarkProbe
 | P12 | PC GUI + TF 卡访问 | ⬜ 待开始 |
 | P13 | 分块大小可配置 + 双轨性能分析 | ⬜ 待开始 |
 | P14 | 拖拽多选 + 省电提醒 | ⬜ 待开始 |
-| P15 | 代码抽模块 + PC Gradle + 单元测试 | ⬜ 待开始（自检已覆盖水位线/截断/文件名清洗/校验超时：`HybridFileXfer-PC/test/WatermarkProbe.java`） |
+| P15 | 代码抽模块 + PC Gradle + 单元测试 | ⬜ 待开始（自检已覆盖水位线/截断/文件名清洗/校验超时/缓冲区块分配失败：`HybridFileXfer-PC/test/` 下 `WatermarkProbe` + `BufferOomProbe`） |
 
 ### 后续改动必须遵守的约束
 

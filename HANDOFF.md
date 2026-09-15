@@ -15,6 +15,15 @@
 **这是破坏性协议变更：`VERSION_CODE` = 303，手机端必须同步升级 APK**，否则连接时会明确报版本不一致
 （旧版行为是控制通道错位死锁）。
 
+补充修复（第四轮之后，均不在 `core/`，无需双端同步）：
+
+- **#113 长文件名崩溃**：`IOServiceImpl.openReadableFile` / `createAndOpenWriteableFile` 失败返回 null，
+  而 `DroidReadFileCall.openFile` / `DroidWriteFileCall.createAndOpenFile` 直接 `pfd.getFileDescriptor()`
+  → NPE（报错里连文件名都没有）。改为判空后抛 `IOException("cannot open file for reading/writing: " + path)`。
+- **#84 堆外内存 OOM**：`HFXClient.connect` 依赖 `createBuffer` 「失败返回 null」的契约走 `onOOM` 提示，
+  但 `JdkHFXClient.createBuffer` 直接放行 `OutOfMemoryError`，整个 JVM 带栈崩掉。加 try/catch 返回 null。
+  缓冲区是堆外内存，上限等于 `-Xmx`（除非显式设 `-XX:MaxDirectMemorySize`）。
+
 ## 二、验证过的 / 未验证的
 
 已验证：
@@ -25,6 +34,7 @@
 | `core/` 与 `nio/` 双端逐字节一致 | `diff -r`；同样已进 `build.yml` 的 `pc` 任务 |
 | Android `core/` 单独编译 | javac（免 SDK） |
 | 水位线、truncate、空文件、文件名清洗/去重、看门狗超时 | `HybridFileXfer-PC/test/WatermarkProbe.java` 6/6 通过；断言有效性的反证也做过；已进 `pc` 任务 |
+| 缓冲区块分配失败降级（#84） | `HybridFileXfer-PC/test/BufferOomProbe.java` 2/2 通过；反证：去掉 catch 后该探针以退出码 1 报出泄漏的 `OutOfMemoryError`；已进 `pc` 任务 |
 | `-x/--checksum` 参数解析与帮助文案 | `java -cp ... Main --checksum -h` |
 | `SO_TIMEOUT` 对 NIO 阻塞读无效、`close()` 可解除阻塞 | 两个独立探针实测 |
 | 握手字段对称性、协议版本门 | 人工核对（无自动化手段） |
