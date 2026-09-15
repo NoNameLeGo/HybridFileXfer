@@ -152,10 +152,13 @@ public class Main {
 
         @Override
         public void onComplete(boolean isUpload, long traffic, long time) {
+            //time 为 0（极快完成或续传整文件跳过）时不能直接相除，否则回调里抛 ArithmeticException
+            //会沿着 sendFiles/receiveFiles 冒泡到 start()，客户端直接带栈退出
+            String speed = time == 0 ? "∞" : Utils.formatSpeed(traffic / time * 1000);
             if (isUpload) {
-                Strings.printf("upload_complete", Utils.formatSpeed(traffic / time * 1000), Utils.formatTime(time), Utils.formatFileSize(traffic));
+                Strings.printf("upload_complete", speed, Utils.formatTime(time), Utils.formatFileSize(traffic));
             } else {
-                Strings.printf("download_complete", Utils.formatSpeed(traffic / time * 1000), Utils.formatTime(time), Utils.formatFileSize(traffic));
+                Strings.printf("download_complete", speed, Utils.formatTime(time), Utils.formatFileSize(traffic));
             }
             //传输完成后的可选项：连接时加 -x/--checksum，由服务端在传输完成后自动校验
             System.out.println("如需校验文件完整性，连接时加 -x/--checksum 参数，或在手机端传输界面点击“MD5 校验”。");

@@ -393,6 +393,12 @@ public abstract class HFXService {
     private void verifyFilesInternal(TransferFileCallback callback) throws IOException {
         List<String> transferPaths = new ArrayList<>(receiverSide ? receivedTransferPaths : transferToSource.keySet());
         if (transferPaths.isEmpty()) {
+            //清单为空也要把结果帧发出去：请求校验的一方（PC 的 -x）在控制循环里等这条帧，
+            //不回它就永远看不到校验结论（传输已成功，但结果栏一直空着）
+            if (peerRequestsChecksum) {
+                ctChannel.writeShort(ControllerIdentifiers.FILE_CHECKSUM_RESULT);
+                ctChannel.writeInt(0);
+            }
             callback.onFileChecksumComplete(true, new ArrayList<>());
             return;
         }

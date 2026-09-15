@@ -34,6 +34,7 @@ import top.weixiansen574.nio.DataByteChannel;
 import java.io.File;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.file.Files;
@@ -76,6 +77,14 @@ public class WatermarkProbe {
     static void check(String what, String expected, String actual) {
         if (!expected.equals(actual)) {
             System.out.println("        FAIL：" + what + " = \"" + actual + "\"（预期 \"" + expected + "\"）");
+            fail++;
+        }
+    }
+
+    /** 断言辅助：布尔条件不成立时计一次失败并打印 */
+    static void checkTrue(String what, boolean condition) {
+        if (!condition) {
+            System.out.println("        FAIL：" + what);
             fail++;
         }
     }
@@ -235,8 +244,18 @@ public class WatermarkProbe {
             //Linux 允许尾部点与保留名，不应改写（否则会无谓丢失续传兼容性）
             check("Linux 尾部点", "dot.", FileSanitizer.sanitizeSegment("dot.", unix));
             check("Linux 保留名", "CON", FileSanitizer.sanitizeSegment("CON", unix));
-            check("超长段截断", repeat("日", 200),
-                    FileSanitizer.sanitizeSegment(repeat("日", 260), unix));
+            //超长段：Windows 按 UTF-16 单元（char）截，Linux/Android 按 UTF-8 字节截。
+            //汉字 3 字节/个：Linux 侧 240 字节 = 80 个字；旧实现按字符截到 200 字（600 字节）仍会 ENAMETOOLONG
+            check("Windows 超长段截断", repeat("a", 200),
+                    FileSanitizer.sanitizeSegment(repeat("a", 300), win));
+            String cjk80 = FileSanitizer.sanitizeSegment(repeat("日", 260), unix);
+            check("Linux 超长段截断", repeat("日", 80), cjk80);
+            checkTrue("Linux 截断后 UTF-8 字节数 <= 240",
+                    cjk80.getBytes(StandardCharsets.UTF_8).length <= 240);
+            checkTrue("Linux 中文名未超限时不被截断",
+                    FileSanitizer.sanitizeSegment(repeat("日", 80), unix).equals(repeat("日", 80)));
+            checkTrue("Linux 截断不切开代理对",
+                    FileSanitizer.sanitizeSegment(repeat("😀", 100), unix).getBytes(StandardCharsets.UTF_8).length <= 240);
 
             //清洗撞车：a:b.txt 与 a_b.txt 都变成 a_b.txt，第二个必须加序号
             //（否则两个文件共享同一份 FileState，水位线互相污染 → 输出损坏）

@@ -2,6 +2,7 @@ package top.weixiansen574.hybridfilexfer.core;
 
 import top.weixiansen574.hybridfilexfer.core.bean.Directory;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
 /**
@@ -24,8 +25,14 @@ public class FileSanitizer {
             "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
             "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
     };
-    /** 单个路径段长度上限（字符数）。ext4 限 255 字节、NTFS 限 255 个 UTF-16 单元，取保守值 */
+    /** NTFS/exFAT 的路径段上限是 255 个 UTF-16 单元，取保守值（还要给 uniquePath 的 "_N" 后缀留位置） */
     private static final int MAX_SEGMENT_LENGTH = 200;
+    /**
+     * ext4/f2fs 的路径段上限是 255 <b>字节</b>（NAME_MAX），不是字符数。
+     * <p>一个汉字占 3 字节，按字符截断会写出 600 字节的名字——仍然创建失败（Issue #113 那一类）。
+     * 240 留出 uniquePath 加序号（最多 5 字节）的余量。</p>
+     */
+    private static final int MAX_SEGMENT_BYTES = 240;
 
     /**
      * 清洗一个路径段（不含路径分隔符），返回在目标文件系统上可创建的等价名字。
@@ -43,11 +50,46 @@ public class FileSanitizer {
             result = trimTrailingDotsAndSpaces(result);
             result = escapeReservedName(result);
         }
-        if (result.length() > MAX_SEGMENT_LENGTH) {
-            //按字符截断：路径段过长在多数文件系统上会直接创建失败
-            result = result.substring(0, MAX_SEGMENT_LENGTH);
+        if (fileSystem == Directory.FILE_SYSTEM_WINDOWS) {
+            //NTFS 按 UTF-16 单元算，char 数即上限
+            if (result.length() > MAX_SEGMENT_LENGTH) {
+                result = result.substring(0, MAX_SEGMENT_LENGTH);
+            }
+        } else {
+            //Linux/Android 按字节算：必须按 UTF-8 字节截断，否则中文名截完还是超限
+            result = truncateToUtf8Bytes(result, MAX_SEGMENT_BYTES);
         }
         return result.isEmpty() ? "_" : result;
+    }
+
+    /** 按 UTF-8 字节数截断，且不切开代理对（emoji 等占两个 char） */
+    private static String truncateToUtf8Bytes(String name, int maxBytes) {
+        if (name.getBytes(StandardCharsets.UTF_8).length <= maxBytes) {
+            return name;
+        }
+        int bytes = 0;
+        int end = 0;
+        while (end < name.length()) {
+            int codePoint = name.codePointAt(end);
+            int width = utf8Length(codePoint);
+            if (bytes + width > maxBytes) {
+                break;
+            }
+            bytes += width;
+            end += Character.charCount(codePoint);
+        }
+        return name.substring(0, end);
+    }
+
+    private static int utf8Length(int codePoint) {
+        if (codePoint < 0x80) {
+            return 1;
+        } else if (codePoint < 0x800) {
+            return 2;
+        } else if (codePoint < 0x10000) {
+            return 3;
+        }
+        return 4;
     }
 
     /** 把非法字符与控制字符替换为下划线（无论目标平台，见类注释：Linux 也可能挂载 exFAT） */

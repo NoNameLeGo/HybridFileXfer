@@ -63,6 +63,9 @@ public class SendFileCall implements Callable<Void> {
                 channel.write(fileBlock.data);
                 readFileCall.recycleBuffer(fileBlock.data);
                 connection.addUploadedBytes(fileBlock.getLength());
+                //缓冲区块已归还缓冲池：置空，避免异常路径（写失败、takeBlock 被中断）再回收一次。
+                //同一 buffer 入池两次会让后续传输把同一块内存同时交给两个分块使用 → 数据错乱
+                fileBlock = null;
             }
         } catch (Exception e) {
             //若发生异常，通知其他传输通道，停止传输

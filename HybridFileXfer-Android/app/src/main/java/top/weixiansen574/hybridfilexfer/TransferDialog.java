@@ -118,7 +118,8 @@ public class TransferDialog {
         setCloseBtnEnable(true);
         progressBar.setProgress(100);
         txvProgress.setText("100%");
-        dialog.setTitle((isUpload ? "▲" : "▼") + Utils.formatSpeed(traffic / time * 1000) +
+        //time 是毫秒计时，极快完成（或计时器精度不够）时会为 0，直接相除会在 UI 线程抛 ArithmeticException
+        dialog.setTitle((isUpload ? "▲" : "▼") + Utils.formatSpeed(time == 0 ? 0 : traffic / time * 1000) +
                 "·" + Utils.formatTime(time) + "·" + Utils.formatFileSize(traffic));
         for (Map.Entry<String, Holder> entry : holderMap.entrySet()) {
             Holder holder = entry.getValue();

@@ -288,7 +288,8 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
             @SuppressLint("SetTextI18n")
             @Override
             public void onComplete(boolean isUpload, long traffic, long time) {
-                txvState.setText((isUpload ? "▲ " : "▼ ") + Utils.formatSpeed(traffic / time * 1000) +
+                //time 为 0 时不能直接相除（同 TransferActivity 的兄弟回调已做同样处理）
+                txvState.setText((isUpload ? "▲ " : "▼ ") + Utils.formatSpeed(time == 0 ? 0 : traffic / time * 1000) +
                         " · " + Utils.formatTime(time) + " · " + Utils.formatFileSize(traffic));
                 for (Map.Entry<String, Holder> entry : holderMap.entrySet()) {
                     Holder holder = entry.getValue();

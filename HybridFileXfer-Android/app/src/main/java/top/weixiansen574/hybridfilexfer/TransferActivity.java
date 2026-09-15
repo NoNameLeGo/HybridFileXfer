@@ -431,11 +431,17 @@ public class TransferActivity extends AppCompatActivity {
                 //避免校验进行中再发起新传输（两条线程同时读写控制通道会串流）
                 transferDialog.setTitle("正在校验文件…");
                 transferDialog.lockButton("校验中…");
+                //此处绝不能 refresh()：自动校验此刻已在传输线程上占用控制通道（HFXService.verifyIfRequested
+                //紧随 onComplete 执行），而刷新远端列表会另开线程往同一个 ctChannel 写 LIST_FILES。
+                //DataByteChannel 的读写共用一个 8 字节缓冲且无同步，两条线程并发写会拼出错误的帧，
+                //对端控制循环（HFXClient.start 的 switch 没有 default 分支）会把帧读错位并永久卡住。
+                //刷新推迟到校验结束（onFileChecksumComplete）。
             } else {
                 //传输完成后的可选项：MD5 文件校验
                 transferDialog.enableVerify(v -> verify());
+                //此时控制通道空闲，刷新远端列表是安全的（上传时 adapter 是 PC 文件列表）
+                adapter.refresh();
             }
-            adapter.refresh();
         }
 
         /** 用户点击"MD5 校验"：后台执行校验（由手机服务端发起） */
@@ -471,6 +477,8 @@ public class TransferActivity extends AppCompatActivity {
                         .show();
             }
             transferDialog.setButton(context.getString(R.string.complete), null);
+            //校验结束，控制通道已空闲：把 onComplete 里推迟的远端列表刷新补上
+            adapter.refresh();
         }
 
         @Override
