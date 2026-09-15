@@ -114,3 +114,11 @@ jobs:
           set -euo pipefail
           javac -encoding UTF-8 -cp "libs/annotations-24.0.1.jar:out/ci" -d out/ci test/WatermarkProbe.java
           java -cp "libs/annotations-24.0.1.jar:out/ci" WatermarkProbe
+
+      - name: '缓冲区块分配失败的降级 自检'
+        working-directory: 'HybridFileXfer-PC'
+        run: |
+          set -euo pipefail
+          javac -encoding UTF-8 -cp "libs/annotations-24.0.1.jar:out/ci" -d out/ci test/BufferOomProbe.java
+          # 必须限死堆外内存，否则「分配失败」这条路径不会触发
+          java -XX:MaxDirectMemorySize=16m -cp "libs/annotations-24.0.1.jar:out/ci" BufferOomProbe

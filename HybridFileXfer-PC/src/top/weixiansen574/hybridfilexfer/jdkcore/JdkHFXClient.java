@@ -29,7 +29,14 @@ public class JdkHFXClient extends HFXClient {
 
     @Override
     public ByteBuffer createBuffer(int size) {
-        return ByteBuffer.allocateDirect(size);
+        try {
+            return ByteBuffer.allocateDirect(size);
+        } catch (OutOfMemoryError e) {
+            //契约是「分配失败返回 null」，由 HFXClient.connect 走 onOOM 优雅退出（提示已创建/需要的块数）。
+            //直接放行 OutOfMemoryError 会让整个 JVM 崩掉（Issue #84 的 Direct buffer memory 栈）。
+            //缓冲区是堆外内存，上限由 -XX:MaxDirectMemorySize 决定（未设置时等于 -Xmx）。
+            return null;
+        }
     }
 
     @Override

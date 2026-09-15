@@ -3,6 +3,7 @@ package top.weixiansen574.hybridfilexfer.droidcore;
 import android.os.ParcelFileDescriptor;
 
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.util.List;
@@ -39,6 +40,11 @@ public class DroidReadFileCall extends ReadFileCall {
     @Override
     protected FileChannel openFile(String path) throws Exception {
         pfd = ioService.openReadableFile(path);
+        if (pfd == null) {
+            //打开失败时 IOServiceImpl 返回 null（如路径过长、SAF 无权限）；
+            //不判空会在这里抛 NullPointerException（Issue #113），报错信息里连文件名都没有
+            throw new IOException("cannot open file for reading: " + path);
+        }
         fileInputStream = new FileInputStream(pfd.getFileDescriptor());
         channel = fileInputStream.getChannel();
         return channel;

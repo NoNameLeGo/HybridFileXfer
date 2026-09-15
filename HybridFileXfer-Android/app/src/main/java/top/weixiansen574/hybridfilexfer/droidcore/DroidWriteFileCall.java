@@ -43,6 +43,11 @@ public class DroidWriteFileCall extends WriteFileCall {
     @Override
     protected FileChannel createAndOpenFile(String path, long length) throws Exception {
         pfd = ioService.createAndOpenWriteableFile(path, length);
+        if (pfd == null) {
+            //创建/打开失败时 IOServiceImpl 返回 null（如路径过长、父目录不可写）；
+            //不判空会在这里抛 NullPointerException（Issue #113），报错信息里连文件名都没有
+            throw new IOException("cannot open file for writing: " + path);
+        }
         fileOutputStream = new FileOutputStream(pfd.getFileDescriptor());
         channel = fileOutputStream.getChannel();
         return channel;
