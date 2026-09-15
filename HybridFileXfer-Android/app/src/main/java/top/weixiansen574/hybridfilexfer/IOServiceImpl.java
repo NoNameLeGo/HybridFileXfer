@@ -7,9 +7,9 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import top.weixiansen574.hybridfilexfer.aidl.IIOService;
@@ -28,7 +28,8 @@ public class IOServiceImpl extends IIOService.Stub {
     //由于Parcel的限制，传输太大的文件列表信息会直接崩，所以要分块
     public static final int CHUNK_SIZE = 1000;
     private final AtomicInteger localFileListSliceId = new AtomicInteger(1);
-    private final Map<Integer, List<ParcelableRemoteFile>> localFileListSliceMap = new HashMap<>();
+    //Binder 线程池会并发调用（listFiles 分片放入 / 取走），必须用并发容器
+    private final Map<Integer, List<ParcelableRemoteFile>> localFileListSliceMap = new ConcurrentHashMap<>();
 
     public void destroy(){
         System.exit(0);
@@ -125,6 +126,10 @@ public class IOServiceImpl extends IIOService.Stub {
 
     public long getFileSize(String path){
         return new File(path).length();
+    }
+
+    public long getFileLastModified(String path){
+        return new File(path).lastModified();
     }
 
     public boolean isFile(String path){

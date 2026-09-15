@@ -21,12 +21,13 @@ import top.weixiansen574.nio.DataByteChannel;
 public abstract class HFXService {
     public static final String CLIENT_HEADER = "HFXC";
     /**
-     * 协议版本。303：握手互换稳定设备标识（取代 IP 作为检查点对端键），
+     * 协议版本。304：校验应答期间发「空路径心跳」，单个大文件算 MD5 超过看门狗阈值时不再被误判卡死。
+     * 303：握手互换稳定设备标识（取代 IP 作为检查点对端键），
      * 新增「传输完成后校验」的请求标志与结果回传（FILE_CHECKSUM_RESULT）。
      * 302：修正检查点握手清单的字段读写不对称（旧版每条多读 2 字节导致控制通道错位死锁），
      * 并将握手清单改为递归展开后的完整文件清单。与 302 及更早版本不兼容。
      */
-    public static final int VERSION_CODE = 303;
+    public static final int VERSION_CODE = 304;
     protected final LinkedBlockingDeque<ByteBuffer> buffers = new LinkedBlockingDeque<>();
     protected DataByteChannel ctChannel;
     protected List<TransferConnection> connections;
@@ -343,7 +344,7 @@ public abstract class HFXService {
      *
      * @param localPath 本地文件路径
      */
-    protected abstract String computeFileMd5(String localPath) throws Exception;
+    protected abstract String computeFileMd5(String localPath, Runnable onProgress) throws Exception;
 
     /**
      * 根据本地角色，将传输路径解析为本机实际文件路径：
@@ -355,17 +356,24 @@ public abstract class HFXService {
 
     /**
      * 计算与传输路径对应的本机文件 MD5；本地缺失/计算失败返回 null。
+     *
+     * @param onProgress 计算过程中的报活回调（可为 null），见 {@link #handleFileChecksumRequest}
      */
-    protected String localMd5(String transferPath) {
+    protected String localMd5(String transferPath, Runnable onProgress) {
         String localPath = resolveLocalPath(transferPath);
         if (localPath == null) {
             return null;
         }
         try {
-            return computeFileMd5(localPath);
+            return computeFileMd5(localPath, onProgress);
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** 不需要报活的版本（本端自己算 MD5 时不占用控制通道） */
+    protected String localMd5(String transferPath) {
+        return localMd5(transferPath, null);
     }
 
     /**
@@ -376,15 +384,19 @@ public abstract class HFXService {
      * 客户端想校验时通过握手告知（{@link #requestChecksumOnTransfer}），
      * 服务端在传输结束时自动调用本方法（见 {@link #verifyIfRequested}），
      * 并把结论回传（{@link ControllerIdentifiers#FILE_CHECKSUM_RESULT}）。</p>
-     * <p>同一时刻只允许一次校验：并发调用直接返回，避免两条线程同时读写控制通道。</p>
+     * <p>同一时刻只允许一次校验：并发调用返回 false（调用方应据此恢复 UI 状态，
+     * 否则按钮会一直停在「校验中…」）。</p>
+     *
+     * @return true 表示本次确实执行了校验
      */
-    public void verifyFiles(TransferFileCallback callback) throws IOException {
-        //重复发起（服务端自动校验与用户点击并发）直接忽略，避免两条线程同时读写控制通道
+    public boolean verifyFiles(TransferFileCallback callback) throws IOException {
+        //重复发起（服务端自动校验与用户点击并发）直接返回，避免两条线程同时读写控制通道
         if (!verifying.compareAndSet(false, true)) {
-            return;
+            return false;
         }
         try {
             verifyFilesInternal(callback);
+            return true;
         } finally {
             verifying.set(false);
         }
@@ -413,11 +425,19 @@ public abstract class HFXService {
         try {
             int count = ctChannel.readInt();
             watchdog.touch();
-            for (int i = 0; i < count; i++) {
+            int received = 0;
+            //对端每算完一块会发一个空路径心跳（见 handleFileChecksumRequest），跳过它，
+            //否则单个大文件算 MD5 超过阈值时看门狗会误判对端卡死
+            while (received < count) {
                 String path = ctChannel.readUTF();
+                watchdog.touch();
+                if (path.isEmpty()) {
+                    continue;
+                }
                 String md5 = ctChannel.readUTF();
                 watchdog.touch();
                 remoteMd5s.put(path, md5);
+                received++;
             }
         } finally {
             //本地 MD5 计算不经过控制通道，无需继续看守
@@ -468,12 +488,26 @@ public abstract class HFXService {
             for (int i = 0; i < count; i++) {
                 String transferPath = ctChannel.readUTF();
                 watchdog.touch();
-                String md5 = localMd5(transferPath);
+                //算 MD5 期间持续发心跳：单个大文件（慢速存储上可能超过看门狗阈值）时，
+                //发起方的看门狗靠这些空路径帧判定「对端还在干活」
+                String md5 = localMd5(transferPath, this::sendChecksumHeartbeat);
                 ctChannel.writeUTF(transferPath);
                 ctChannel.writeUTF(md5 == null ? "" : md5);
             }
         } finally {
             watchdog.cancel();
+        }
+    }
+
+    /**
+     * 校验心跳：空路径帧，只用来告诉对端「我还在算」。
+     * <p>协议 304 起；发起方在读取结果时跳过空路径（见 {@link #verifyFilesInternal}）。</p>
+     */
+    private void sendChecksumHeartbeat() {
+        try {
+            ctChannel.writeUTF("");
+        } catch (IOException ignored) {
+            //对端已关通道：忽略。后续的正式写入会抛异常并结束本次交换
         }
     }
 

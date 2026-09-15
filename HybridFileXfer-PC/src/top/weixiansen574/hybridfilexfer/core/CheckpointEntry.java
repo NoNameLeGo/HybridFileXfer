@@ -17,7 +17,12 @@ public class CheckpointEntry {
     public final long completedBytes;
     /** 对端标识 */
     public final String peerId;
-    /** 记录时间戳（毫秒） */
+    /**
+     * 记录时间戳（毫秒），每次 saveCheckpoint 刷新。
+     * <p>接收方用它判断「目标文件是否在检查点记录之后被改动过」：
+     * 正常续传时目标文件的 mtime ≤ 记录时间（写入发生在记录之前，或已回写为源文件的 mtime）；
+     * 若目标文件在中断后被外部替换/改过，mtime 会大于该时间戳，检查点作废 → 全量重传。</p>
+     */
     public final long timestamp;
 
     public CheckpointEntry(String filePath, long totalSize, long lastModified, long completedBytes, String peerId, long timestamp) {

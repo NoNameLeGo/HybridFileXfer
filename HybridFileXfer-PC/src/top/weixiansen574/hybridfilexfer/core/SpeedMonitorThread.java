@@ -8,7 +8,8 @@ import top.weixiansen574.hybridfilexfer.core.bean.TrafficInfo;
 import top.weixiansen574.hybridfilexfer.core.callback.TransferFileCallback;
 
 public class SpeedMonitorThread extends Thread {
-    private boolean isRun = true;
+    /** 跨线程读写：cancel() 由 UI/传输线程调用，run() 在监控线程读 */
+    private volatile boolean isRun = true;
     private final List<TransferConnection> connections;
     private final TransferFileCallback callback;
     private final long totalBytes;
@@ -29,6 +30,10 @@ public class SpeedMonitorThread extends Thread {
             try {
                 Thread.sleep(1000);
             } catch (InterruptedException e) {
+                break;
+            }
+            //cancel() 后不要再回调：对话框可能已经 dismiss，回调会摸到已销毁的 View
+            if (!isRun) {
                 break;
             }
             List<TrafficInfo> trafficInfoList = new ArrayList<>();

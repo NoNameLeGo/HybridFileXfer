@@ -140,60 +140,62 @@ public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
         }
         //RandomAccessFile randomAccessFile = new RandomAccessFile(file, "r");
         FileChannel channel = openFile(file.getPath());
-        long length = channel.size();
-        long lastModified = file.lastModified();
-        //断点续传：跳过已确认完成的字节（偏移为持久化单位，与块大小无关）。
-        //持久化值可能来自不同的块大小配置，与接收端一致地对齐到当前块大小边界，
-        //对齐后的整块从该边界重传，不多不漏
-        long skipBytes = checkpoints.getOrDefault(file.getPath(), 0L);
-        long alignedSkip = (skipBytes / FileBlock.BLOCK_SIZE) * FileBlock.BLOCK_SIZE;
-        long remaining = length;
-        if (alignedSkip > 0) {
-            if (alignedSkip >= length) {
-                //整个文件已传完（或文件被改动变小），无需再发送任何块，接收方保留现有文件。
-                //进度按文件大小计入，否则本端进度永远到不了 100%
-                completedBytes.addAndGet(length);
-                closeFile();
+        //异常路径（读抛错、buffers.take() 被中断）也必须关文件，否则 Android 侧会泄漏
+        //ParcelFileDescriptor（跨进程 fd），每次失败漏一个
+        try {
+            long length = channel.size();
+            long lastModified = file.lastModified();
+            //断点续传：跳过已确认完成的字节（偏移为持久化单位，与块大小无关）。
+            //持久化值可能来自不同的块大小配置，与接收端一致地对齐到当前块大小边界，
+            //对齐后的整块从该边界重传，不多不漏
+            long skipBytes = checkpoints.getOrDefault(file.getPath(), 0L);
+            long alignedSkip = (skipBytes / FileBlock.BLOCK_SIZE) * FileBlock.BLOCK_SIZE;
+            long remaining = length;
+            if (alignedSkip > 0) {
+                if (alignedSkip >= length) {
+                    //整个文件已传完（或文件被改动变小），无需再发送任何块，接收方保留现有文件。
+                    //进度按文件大小计入，否则本端进度永远到不了 100%
+                    completedBytes.addAndGet(length);
+                    return;
+                }
+                channel.position(alignedSkip);
+                remaining -= alignedSkip;
+                completedBytes.addAndGet(alignedSkip);
+            }
+            if (length == 0) {
+                ByteBuffer buffer = buffers.take();
+                buffer.clear();
+                buffer.limit(0);
+                deque.add(new FileBlock(true,
+                        fileIndex, transferPath(file),
+                        lastModified, length, 0, buffer));
                 return;
             }
-            channel.position(alignedSkip);
-            remaining -= alignedSkip;
-            completedBytes.addAndGet(alignedSkip);
-        }
-        if (length == 0){
-            ByteBuffer buffer = buffers.take();
-            buffer.clear();
-            buffer.limit(0);
-            deque.add(new FileBlock(true,
-                    fileIndex, transferPath(file),
-                    lastModified, length, 0, buffer));
-            closeFile();
-            return;
-        }
-        //起始块索引：从对齐后的字节位置对应的块开始
-        int i = (int) (alignedSkip / FileBlock.BLOCK_SIZE);
-        while (remaining > 0){
-            int blkSize = (int) Math.min(remaining,FileBlock.BLOCK_SIZE);
-            ByteBuffer buffer = buffers.take();
-            buffer.clear();
-            buffer.limit(blkSize);
-            int read;
-            while (buffer.hasRemaining()) {
-                read = channel.read(buffer);
-                if (read < 0) {
-                    //源文件在 size() 之后被截断：必须抛错，否则 hasRemaining() 恒为 true 导致死循环
-                    closeFile();
-                    throw new IOException("source file shrank while reading: " + file.getPath());
+            //起始块索引：从对齐后的字节位置对应的块开始
+            int i = (int) (alignedSkip / FileBlock.BLOCK_SIZE);
+            while (remaining > 0) {
+                int blkSize = (int) Math.min(remaining, FileBlock.BLOCK_SIZE);
+                ByteBuffer buffer = buffers.take();
+                buffer.clear();
+                buffer.limit(blkSize);
+                int read;
+                while (buffer.hasRemaining()) {
+                    read = channel.read(buffer);
+                    if (read < 0) {
+                        //源文件在 size() 之后被截断：必须抛错，否则 hasRemaining() 恒为 true 导致死循环
+                        throw new IOException("source file shrank while reading: " + file.getPath());
+                    }
                 }
+                deque.add(new FileBlock(true,
+                        fileIndex, transferPath(file),
+                        lastModified, length, i, buffer));
+                completedBytes.addAndGet(blkSize);
+                remaining -= blkSize;
+                i++;
             }
-            deque.add(new FileBlock(true,
-                    fileIndex, transferPath(file),
-                    lastModified, length, i, buffer));
-            completedBytes.addAndGet(blkSize);
-            remaining -= blkSize;
-            i++;
+        } finally {
+            closeFile();
         }
-        closeFile();
     }
 
     public void recycleBuffer(ByteBuffer buffer) {

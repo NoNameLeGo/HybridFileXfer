@@ -122,13 +122,18 @@ public class JdkHFXClient extends HFXClient {
     @Override
     protected boolean isCheckpointValid(String transferPath, CheckpointEntry entry) {
         File file = new File(transferPath);
-        return file.isFile() && file.length() >= entry.completedBytes;
+        //除了长度，还要挡住「目标文件在检查点记录之后被外部替换过」：
+        //只比长度的话，换成另一个更大的同名文件时会跳过前 N 字节，写出「外来文件头 + 源文件尾」的混合文件，
+        //而 MD5 默认关闭，用户不会收到任何提示。
+        //注：不能用「mtime == 源文件 mtime」判断——半成品文件的 mtime 是写入时间，不等于源 mtime。
+        return file.isFile() && file.length() >= entry.completedBytes
+                && file.lastModified() <= entry.timestamp;
     }
 
     @Override
-    protected String computeFileMd5(String localPath) throws Exception {
+    protected String computeFileMd5(String localPath, Runnable onProgress) throws Exception {
         try (FileInputStream fis = new FileInputStream(localPath)) {
-            return Utils.md5Hex(fis);
+            return Utils.md5Hex(fis, onProgress);
         } catch (IOException e) {
             return null;
         }

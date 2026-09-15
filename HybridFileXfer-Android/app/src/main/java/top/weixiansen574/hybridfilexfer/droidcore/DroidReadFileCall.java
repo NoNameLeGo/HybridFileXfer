@@ -52,8 +52,17 @@ public class DroidReadFileCall extends ReadFileCall {
 
     @Override
     protected void closeFile() throws Exception {
-        channel.close();
-        fileInputStream.close();
+        //逐个关：任何一个失败都不能让后面的资源漏关（尤其 PFD，它才是跨进程 fd 的持有者）
+        try {
+            channel.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        try {
+            fileInputStream.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
         pfd.close();
     }
 

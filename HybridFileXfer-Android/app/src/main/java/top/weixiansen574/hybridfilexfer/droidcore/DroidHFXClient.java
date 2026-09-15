@@ -92,20 +92,26 @@ public class DroidHFXClient extends HFXClient {
     @Override
     protected boolean isCheckpointValid(String transferPath, CheckpointEntry entry) {
         try {
-            return iioService.isFile(transferPath) && iioService.getFileSize(transferPath) >= entry.completedBytes;
+            //除长度外还要求「目标文件没有在检查点记录之后被改过」（见 CheckpointEntry.timestamp）：
+            //否则被换成另一个更大的同名文件时会跳过前 N 字节，静默写出混合文件
+            return iioService.isFile(transferPath)
+                    && iioService.getFileSize(transferPath) >= entry.completedBytes
+                    && iioService.getFileLastModified(transferPath) <= entry.timestamp;
         } catch (RemoteException e) {
             return false;
         }
     }
 
     @Override
-    protected String computeFileMd5(String localPath) throws Exception {
+    protected String computeFileMd5(String localPath, Runnable onProgress) throws Exception {
         ParcelFileDescriptor pfd = iioService.openReadableFile(localPath);
         if (pfd == null) {
             return null;
         }
-        try (FileInputStream fis = new FileInputStream(pfd.getFileDescriptor())) {
-            return Utils.md5Hex(fis);
+        try {
+            //fd 的所有权属于 ParcelFileDescriptor，只由它关闭；
+            //若再用 FileInputStream 的 try-with-resources 关一次同一个 fd，第二次关闭会落在已被复用的 fd 上
+            return Utils.md5Hex(new FileInputStream(pfd.getFileDescriptor()), onProgress);
         } finally {
             pfd.close();
         }

@@ -114,12 +114,27 @@ public class Utils {
      * @return 32 位小写十六进制 md5；计算失败时返回 null
      */
     public static String md5Hex(InputStream in) {
+        return md5Hex(in, null);
+    }
+
+    /**
+     * 计算输入流的 MD5（小写十六进制）。流由调用方负责关闭。
+     *
+     * @param onProgress 每读完一块（1MB）回调一次，可为 null。
+     *                   用于给控制通道看门狗「报活」：单个大文件算 MD5 可能远超超时阈值，
+     *                   不报活会被对端当成卡死并关掉通道。
+     * @return 32 位小写十六进制 md5；计算失败时返回 null
+     */
+    public static String md5Hex(InputStream in, Runnable onProgress) {
         try {
             MessageDigest digest = MessageDigest.getInstance("MD5");
             byte[] buffer = new byte[1024 * 1024];
             int read;
             while ((read = in.read(buffer)) != -1) {
                 digest.update(buffer, 0, read);
+                if (onProgress != null) {
+                    onProgress.run();
+                }
             }
             byte[] bytes = digest.digest();
             StringBuilder sb = new StringBuilder(bytes.length * 2);

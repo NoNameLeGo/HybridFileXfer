@@ -303,6 +303,14 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
 
     // 修改后的putBlock（保持原有逻辑）
     public synchronized void putBlock(FileBlock block, int tIndex) {
+        //cancel() 之后再到达的块永远不会被写线程取走：直接归还缓冲块，
+        //否则 Android 侧每块 1MB 的 native 内存就再也回不来了
+        if (canceled) {
+            if (block.data != null) {
+                buffers.add(block.data);
+            }
+            return;
+        }
         dequeArray.get(tIndex).add(block);
         notify();  // 唤醒可能阻塞的写线程
     }

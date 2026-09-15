@@ -127,6 +127,9 @@ public class HFXServer extends HFXService {
                     ctChannel.writeBoolean(false);
                     ctChannel.close();
                     callback.onAcceptFailed(name);
+                    //本轮已 accept 的传输通道必须关掉：continue conn 会把 connections 整个丢掉，
+                    //不关则 App 进程里 socket fd 随每次失败累积（选多个网卡时更明显）
+                    closeAcceptedConnections();
                     continue conn;
                 }
             }
@@ -138,6 +141,7 @@ public class HFXServer extends HFXService {
         ctChannel.writeInt(remoteBufferCount);
         if (!ctChannel.readBoolean()) {
             callback.onPcOOM();
+            closeAcceptedConnections();
             serverSocketChannel.close();
             return;
         }
@@ -153,6 +157,7 @@ public class HFXServer extends HFXService {
                 }
                 buffers.clear();
                 ctChannel.writeBoolean(false);
+                closeAcceptedConnections();
                 serverSocketChannel.close();
                 callback.onMeOOM(i, localBufferCount);
                 return;
@@ -178,6 +183,20 @@ public class HFXServer extends HFXService {
                 e.printStackTrace();
             }
         }
+    }
+
+    /** 关闭本轮握手已 accept 的传输通道（失败/OOM 路径上 connections 会被丢弃，不关就泄漏 fd） */
+    private void closeAcceptedConnections() {
+        if (connections == null) {
+            return;
+        }
+        for (TransferConnection connection : connections) {
+            try {
+                connection.close();
+            } catch (IOException ignored) {
+            }
+        }
+        connections = null;
     }
 
     public void disconnect(BackstageTask.BaseEventHandler callback) {
@@ -348,14 +367,18 @@ public class HFXServer extends HFXService {
     @Override
     protected boolean isCheckpointValid(String transferPath, CheckpointEntry entry) {
         try {
-            return ioService.isFile(transferPath) && ioService.getFileSize(transferPath) >= entry.completedBytes;
+            //除长度外还要求「目标文件没有在检查点记录之后被改过」（见 CheckpointEntry.timestamp）：
+            //否则被换成另一个更大的同名文件时会跳过前 N 字节，静默写出混合文件
+            return ioService.isFile(transferPath)
+                    && ioService.getFileSize(transferPath) >= entry.completedBytes
+                    && ioService.getFileLastModified(transferPath) <= entry.timestamp;
         } catch (RemoteException e) {
             return false;
         }
     }
 
     @Override
-    protected String computeFileMd5(String localPath) throws Exception {
+    protected String computeFileMd5(String localPath, Runnable onProgress) throws Exception {
         ParcelFileDescriptor pfd = ioService.openReadableFile(localPath);
         if (pfd == null) {
             return null;
@@ -363,7 +386,7 @@ public class HFXServer extends HFXService {
         try {
             //fd 的所有权属于 ParcelFileDescriptor，只由它关闭；
             //若再用 FileInputStream 的 try-with-resources 关一次同一个 fd，第二次关闭会落在已被复用的 fd 上
-            return Utils.md5Hex(new FileInputStream(pfd.getFileDescriptor()));
+            return Utils.md5Hex(new FileInputStream(pfd.getFileDescriptor()), onProgress);
         } finally {
             pfd.close();
         }

@@ -105,6 +105,9 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
         iioService = IIOService.Stub.asInterface(service);
         progressDialog.setMessage(getString(R.string.connecting_server));
         client = new DroidHFXClient(controllerIp, 5740, homeDir, iioService, context);
+        //对传时用户可在连接对话框里勾选「传输完成后校验」：客户端没有控制通道读循环，
+        //只能通过握手把意图告诉服务端，由服务端在传输结束后发起校验并回传结论
+        client.requestChecksumOnTransfer = getIntent().getBooleanExtra("checksum", false);
         new ConnectServerTask(new ConnectServerTask.Callback() {
             @Override
             public void onConnectSuccess(List<String> channelNames) {
@@ -304,6 +307,30 @@ public class ClientActivity extends AppCompatActivity implements ServiceConnecti
             public void onIncomplete() {
                 Toast.makeText(context, R.string.chuan_shu_shi_fa_sheng_yi_chang, Toast.LENGTH_LONG).show();
                 finish();
+            }
+
+            @Override
+            public void onFileChecksumComplete(boolean passed, List<String> mismatchFiles) {
+                //本端（客户端）请求的校验：结论由服务端回传。此前这个回调没有实现，
+                //对传时勾了校验也什么都看不到
+                if (passed) {
+                    txvState.setText("MD5 校验通过 ✓");
+                    Toast.makeText(context, "MD5 校验通过 ✓", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                StringBuilder detail = new StringBuilder();
+                int shown = Math.min(mismatchFiles.size(), 10);
+                for (int i = 0; i < shown; i++) {
+                    detail.append(mismatchFiles.get(i)).append('\n');
+                }
+                if (mismatchFiles.size() > shown) {
+                    detail.append("…（其余 ").append(mismatchFiles.size() - shown).append(" 个省略）");
+                }
+                new AlertDialog.Builder(context)
+                        .setTitle("MD5 校验失败：" + mismatchFiles.size() + " 个文件")
+                        .setMessage("以下文件内容不一致或缺失，建议重新传输：\n\n" + detail)
+                        .setPositiveButton(R.string.ok, null)
+                        .show();
             }
 
             @Override

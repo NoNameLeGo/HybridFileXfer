@@ -318,6 +318,81 @@ public class WatermarkProbe {
             channel.close(); accepted.close(); channel2.close(); accepted2.close(); srv.close();
         }
 
+        // ===== 场景 7：校验交换的空路径心跳（协议 304；单个大文件算 MD5 超过看门狗阈值时不误杀） =====
+        {
+            System.out.println("[场景7] 校验应答期间的心跳帧（空路径）与 md5 报活回调");
+            //md5Hex 必须按块回调，否则对端看门狗收不到任何「还在干活」的信号
+            byte[] data = new byte[3 * 1024 * 1024 + 7];
+            final int[] beats = {0};
+            String md5 = top.weixiansen574.hybridfilexfer.core.Utils.md5Hex(
+                    new java.io.ByteArrayInputStream(data), () -> beats[0]++);
+            checkTrue("md5Hex 对 3MB+ 输入至少回调 3 次（实测 " + beats[0] + " 次）", beats[0] >= 3);
+            check("md5Hex 结果不因回调而变",
+                    top.weixiansen574.hybridfilexfer.core.Utils.md5Hex(new java.io.ByteArrayInputStream(data)), md5);
+
+            //发起方读结果时必须跳过空路径心跳，否则会把心跳当成路径、把真正的路径当成 md5 → 帧错位
+            ServerSocketChannel srv7 = ServerSocketChannel.open().bind(new InetSocketAddress("127.0.0.1", 0));
+            int port7 = ((InetSocketAddress) srv7.getLocalAddress()).getPort();
+            SocketChannel initiatorSide = SocketChannel.open(new InetSocketAddress("127.0.0.1", port7));
+            SocketChannel responderSide = srv7.accept();
+
+            File target = new File(dir, "checksum.bin");
+            Files.write(target.toPath(), data);
+            String expected = md5;
+
+            Thread responder = new Thread(() -> {
+                try {
+                    DataByteChannel out = new DataByteChannel(responderSide);
+                    out.writeInt(1);                       //本次校验 1 个文件
+                    out.writeUTF(""); out.writeUTF("");    //心跳：正在算 MD5
+                    out.writeUTF(target.getPath());
+                    out.writeUTF(expected);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            });
+            responder.setDaemon(true);
+            responder.start();
+
+            //发起方：真实的 JdkHFXClient（HFXService 子类），用反射注入控制通道与「接收方」角色
+            top.weixiansen574.hybridfilexfer.jdkcore.JdkHFXClient initiator =
+                    new top.weixiansen574.hybridfilexfer.jdkcore.JdkHFXClient("127.0.0.1", 0, dir.getPath());
+            java.lang.reflect.Field ctField = top.weixiansen574.hybridfilexfer.core.HFXService.class.getDeclaredField("ctChannel");
+            ctField.setAccessible(true);
+            ctField.set(initiator, new DataByteChannel(initiatorSide));
+            java.lang.reflect.Field sideField = top.weixiansen574.hybridfilexfer.core.HFXService.class.getDeclaredField("receiverSide");
+            sideField.setAccessible(true);
+            sideField.setBoolean(initiator, true);
+            java.lang.reflect.Field pathsField = top.weixiansen574.hybridfilexfer.core.HFXService.class.getDeclaredField("receivedTransferPaths");
+            pathsField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            List<String> receivedPaths = (List<String>) pathsField.get(initiator);
+            receivedPaths.add(target.getPath());
+
+            final boolean[] passed = {false};
+            final List<String>[] mismatches = new List[]{null};
+            initiator.verifyFiles(new top.weixiansen574.hybridfilexfer.core.callback.TransferFileCallback() {
+                public void onFileUploading(String n, String p, long t, long s) { }
+                public void onFileDownloading(String n, String p, long t, long s) { }
+                public void onSpeedInfo(List<top.weixiansen574.hybridfilexfer.core.bean.TrafficInfo> l) { }
+                public void onChannelComplete(String n, long t, long s) { }
+                public void onChannelError(String n, int e, String m) { }
+                public void onReadFileError(String m) { }
+                public void onWriteFileError(String m) { }
+                public void onComplete(boolean u, long t, long s) { }
+                public void onIncomplete() { }
+                public void onFileChecksumComplete(boolean ok, List<String> files) {
+                    passed[0] = ok;
+                    mismatches[0] = files;
+                }
+            });
+            responder.join(5000);
+            System.out.println("        校验结果 passed=" + passed[0] + " 失败文件=" + mismatches[0]);
+            checkTrue("跳过心跳后校验通过（旧代码会把空路径当文件名 → 误报失败）", passed[0]);
+            checkTrue("失败清单为空", mismatches[0] != null && mismatches[0].isEmpty());
+            initiatorSide.close(); responderSide.close(); srv7.close();
+        }
+
         System.out.println();
         System.out.println(fail == 0 ? "全部通过" : (fail + " 项失败"));
         deleteRecursively(dir);

@@ -71,5 +71,14 @@
         android:inputType="text"
         android:autofillHints="" />
 
+    <CheckBox
+        android:id="@+id/check_checksum"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="20dp"
+        android:layout_marginBottom="10dp"
+        android:text="传输完成后校验文件完整性 (MD5)"
+        android:textColor="@color/fond" />
+
 
 </LinearLayout>

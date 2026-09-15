@@ -22,6 +22,7 @@ import android.view.MenuItem;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.Spinner;
 import android.widget.Toast;
@@ -406,6 +407,7 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
         editMainDir.setText(Environment.getExternalStorageDirectory().getAbsolutePath());
         Spinner spinner = view.findViewById(R.id.spinner_mode);
         spinner.setSelection(config.getClientIOMode());
+        CheckBox checkChecksum = view.findViewById(R.id.check_checksum);
         AlertDialog dialog = new AlertDialog.Builder(context)
                 .setView(view)
                 .setTitle(R.string.connect_to_server)
@@ -435,6 +437,8 @@ public class MainActivity extends AppCompatActivity implements View.OnClickListe
             intent.putExtra("io_mode", spinner.getSelectedItemPosition());
             intent.putExtra("controller_ip", ip);
             intent.putExtra("home_dir", editMainDir.getText().toString());
+            //对传场景下的传输后校验开关：客户端只能通过握手告知服务端（服务端无控制通道读循环）
+            intent.putExtra("checksum", checkChecksum.isChecked());
             startActivity(intent);
             dialog.dismiss();
         });

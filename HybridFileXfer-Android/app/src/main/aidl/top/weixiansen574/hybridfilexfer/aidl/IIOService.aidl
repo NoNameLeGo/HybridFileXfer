@@ -18,5 +18,6 @@ interface IIOService {
     boolean isFile(String path) = 10;
     String getFileParent(String path) = 11;
     long getFileSize(String path) = 14;
+    long getFileLastModified(String path) = 15;
     void destroy() = 16777114;
 }

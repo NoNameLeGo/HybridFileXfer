@@ -59,7 +59,7 @@ java -jar HybridFileXfer.jar -c 192.168.1.114 -x
 java -jar HybridFileXfer.jar -h
 ```
 
-手机端 APK 需与电脑端同版本（协议 303，旧版会直接报版本不一致）。
+手机端 APK 需与电脑端同版本（协议 304，旧版会直接报版本不一致）。
 
 ---
 
@@ -141,7 +141,7 @@ HybridFileXfer/
 | 常量 | 值 | 说明 |
 |------|-----|------|
 | `FileBlock.BLOCK_SIZE` | 1024×1024 (1MB) | 分块大小 |
-| `HFXService.VERSION_CODE` | 303 | 协议版本（302→303：握手互换稳定设备标识 + 校验请求/结果回传） |
+| `HFXService.VERSION_CODE` | 304 | 协议版本（303→304：校验应答期间发空路径心跳；302→303：握手互换稳定设备标识 + 校验请求/结果回传） |
 | `HFXService.CLIENT_HEADER` | "HFXC" | 控制通道握手标识 |
 | `ControllerIdentifiers.REQUEST_RECEIVE` | 10 | 请求接收文件 |
 | `ControllerIdentifiers.REQUEST_SEND` | 11 | 请求发送文件 |
@@ -219,11 +219,11 @@ java -XX:MaxDirectMemorySize=16m -cp "libs/annotations-24.0.1.jar;.verify" Buffe
 
 ### 概述
 
-断点续传、传输后 MD5 校验、文件名清洗、总体进度显示**均已实现**（协议 `VERSION_CODE` = 303，
+断点续传、传输后 MD5 校验、文件名清洗、总体进度显示**均已实现**（协议 `VERSION_CODE` = 304，
 手机端 APK 必须同步升级）。当前在做的是 P10 以后的基础设施与体验项，见下方「实现进度」。
 
-已发版：`v3.0.4`（2026-09-15，协议 303）。更早的 v3.0.1/v3.0.3 是协议 **301**，与 303 不能互连——
-手机端 APK 与 PC jar 必须同版本。
+已发版：`v3.0.4`（2026-09-15，协议 303）。**源码 HEAD 已经是协议 304（校验心跳 + 一轮审查修复），尚未发版**；
+301/303/304 之间不能互连——手机端 APK 与 PC jar 必须同版本。
 
 遗留的主要短板（有意保留）：P2-6 发送方进度语义、校验无逐文件进度、服务端无控制通道读循环（P12）。
 
@@ -266,7 +266,7 @@ java -XX:MaxDirectMemorySize=16m -cp "libs/annotations-24.0.1.jar;.verify" Buffe
 | 阶段 | 内容 | 状态 |
 |------|------|------|
 | P0 | CheckpointManager + 数据层（SQLite / JSON） | ✅ 已完成（Android CheckpointEntry 存 ConfigDB transfer_checkpoint 表 / PC JdkCheckpointManager 存 JSON Lines，7 天自动清理） |
-| P1 | ControllerIdentifiers 新增常量 + checkpoint 协议读写 | ✅ 已完成（CHECKPOINT_REQUEST=14；握手中交换文件列表 + 检查点；VERSION_CODE 现为 303） |
+| P1 | ControllerIdentifiers 新增常量 + checkpoint 协议读写 | ✅ 已完成（CHECKPOINT_REQUEST=14；握手中交换文件列表 + 检查点；VERSION_CODE 现为 304） |
 | P2 | WriteFileCall：续写 + checkpoint + md5 + 写入验证 | ◑ 部分完成（续写 + 每块存档 + 完成即清除 + 磁盘校验兜底；md5 采用传输后可选校验方案，写入验证未做） |
 | P3 | ReadFileCall：跳过已传块 + md5 累积 | ◑ 部分完成（跳过已传块；不做传输中 md5 累积，改为传输完成后可选全量校验） |
 | P4 | FileSanitizer：文件名非法字符清洗 | ✅ 已完成（新增 `core/FileSanitizer`：非法字符/控制字符、Windows 尾部点与空格、保留设备名 CON/NUL/COM1…、超长段截断；并在握手前对传输路径去重） |

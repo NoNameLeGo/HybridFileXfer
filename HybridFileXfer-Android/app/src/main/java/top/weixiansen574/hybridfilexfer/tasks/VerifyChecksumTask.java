@@ -16,6 +16,9 @@ public class VerifyChecksumTask extends BackstageTask<BTransferFileCallback> {
 
     @Override
     protected void onStart(BTransferFileCallback callback) throws Throwable {
-        server.verifyFiles(callback);
+        //已有校验在进行中时不再重复发起：必须把异常抛出去，否则对话框会一直停在「校验中…」
+        if (!server.verifyFiles(callback)) {
+            throw new IllegalStateException("已有一个校验在进行中，请等它结束");
+        }
     }
 }
