@@ -70,15 +70,20 @@
 - P2-8 `core/` 双端逐字节镜像（各约 2600 行），每处修改要改两遍（P15 抽模块才能解决）；
 - 校验无逐文件进度（大文件时对话框只有「正在校验文件…」）；
 - 服务端无控制通道读循环（P12 双向调度），客户端发起的能力只能挂在现有握手边上；
-- `release.yml` 的 `pc-linux` 仍用 `curl` 从 Maven Central 现下 annotations，而 `pc-windows` 用仓库里 vendor 的 `libs/`；
-- 发版时 `-v` 的版本号（`messages_*.properties`，5 个语言文件）需**手工**改，`release.yml` 只自动同步 Android 的 `versionName`（可改成同样 sed 一次）；
 - P10（日志框架）、P11（暂停/取消、跳过重复文件、传输历史）、P12（PC GUI、TF 卡）、
   P13（分块可配置、双轨性能）、P15（抽模块、Gradle、正式单元测试）。
 
-## 四、已废弃但仍留在仓库里的东西
+## 四、已清理 / 待清理
 
-- `HybridFileXfer-PC/start.c` + `start.exe`（C 启动器）与 `HybridFileXfer-PC/HybridFileXferLauncher.exe`、
-  `HybridFileXferLauncher-linux-x64`：交互逻辑已在 `5e33b0c` 移植进 `HybridFileXferLauncher/Program.cs`，
-  这 4 个文件（约 4.1 MB）不再被 CI、脚本或文档引用。删不删待定。
+已清理：
+
+- 4 个已废弃的启动器二进制（`HybridFileXfer-PC/start.c`、`start.exe`、`HybridFileXferLauncher.exe`、
+  `HybridFileXferLauncher-linux-x64`，共约 4.1 MB）。交互逻辑已在 `5e33b0c` 移植进
+  `HybridFileXferLauncher/Program.cs`，CI 从源码构建后命名为 `start.exe` 才入包，这 4 个文件无人引用。
+- `release.yml` 的 `pc-linux` 不再用 `curl` 现下 annotations（改用 vendor 的 `libs/`，
+  仓库里已无联网构建依赖）；两个 PC 任务都从 tag 自动同步 `-v` 的版本号。
+
+待清理：
+
 - `HybridFileXfer-Android/app/build.gradle` 的 `versionName "3.0.0 - beta"` 仅为本地构建默认值，
   发版时由 `release.yml` 按 tag 覆盖。

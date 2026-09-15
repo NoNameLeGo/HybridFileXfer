@@ -184,7 +184,8 @@ PC 端为 IntelliJ IDEA 项目（`.iml`），源码在 `src/`，编译输出在 
 所以 PC 端不再依赖“记得本地跑”。本地跑同样的命令只是为了**反馈更快**（约 15s vs 一两分钟）。
 
 **发布注意**：`-v` 里的版本号（`src/messages_*.properties` 的 `version=`，5 个语言文件）
-**不会**被 `release.yml` 自动同步（那里只 sed 了 Android 的 `versionName`），发版前需手工改。
+由 `release.yml` 从 tag 自动 sed（含日期，并用 `grep` 校验真的改上了）；Android 的 `versionName` 同样自动同步。
+源码里写着的版本号只是本地构建的默认值，不必每次发版手工改。
 
 ```bash
 # 手动编译（与 CI 命令一致，只是输出目录不同：本地 out/、build.yml 用 out/ci、release.yml 用 out/pc）

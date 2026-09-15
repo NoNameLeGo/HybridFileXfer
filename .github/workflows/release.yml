@@ -135,6 +135,11 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf out/pc && mkdir -p out/pc
+          # 同步 -v / -h 里的版本号（各语言 messages 里的版本不会自动跟着 tag 走）
+          VER="${{ env.RELEASE_TAG }}"; VER="${VER#v}"; DATE="$(date -u +%Y-%-m-%-d)"
+          sed -i -E "s/(^version=.* v)[0-9.]+ [0-9-]+$/\1${VER} ${DATE}/" src/messages_*.properties
+          grep -q "v${VER} " src/messages_*.properties || { echo "::error::messages_*.properties 版本号未同步，检查 version= 行格式"; exit 1; }
+          grep -h '^version=' src/messages_*.properties
           # jetbrains annotations 已 vendor 在 libs/（Apache-2.0，仅编译期依赖），无需联网下载
           find src -name '*.java' > sources.txt
           javac -encoding UTF-8 -cp libs/annotations-24.0.1.jar -d out/pc @sources.txt
@@ -198,10 +203,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out/pc
-          curl -fsSL -o annotations.jar \
-            https://repo1.maven.org/maven2/org/jetbrains/annotations/24.0.1/annotations-24.0.1.jar
+          # 同步 -v / -h 里的版本号（各语言 messages 里的版本不会自动跟着 tag 走）
+          VER="${{ env.RELEASE_TAG }}"; VER="${VER#v}"; DATE="$(date -u +%Y-%-m-%-d)"
+          sed -i -E "s/(^version=.* v)[0-9.]+ [0-9-]+$/\1${VER} ${DATE}/" src/messages_*.properties
+          grep -q "v${VER} " src/messages_*.properties || { echo "::error::messages_*.properties 版本号未同步，检查 version= 行格式"; exit 1; }
+          grep -h '^version=' src/messages_*.properties
+          # jetbrains annotations 已 vendor 在 libs/（Apache-2.0，仅编译期依赖），无需联网下载
+          # （这里以前是 curl 现下，唯一一个联网构建依赖，现与 pc-windows 一致用 vendor 的 jar）
           find src -name '*.java' > sources.txt
-          javac -encoding UTF-8 -cp annotations.jar -d out/pc @sources.txt
+          javac -encoding UTF-8 -cp libs/annotations-24.0.1.jar -d out/pc @sources.txt
           cp src/messages_*.properties out/pc/
           # 必须带入 src/META-INF/MANIFEST.MF（含 Main-Class），否则 java -jar / start.exe 启动即退
           jar cfm HybridFileXfer.jar src/META-INF/MANIFEST.MF -C out/pc .
