@@ -310,3 +310,16 @@ java -XX:MaxDirectMemorySize=16m -cp "libs/annotations-24.0.1.jar;.verify" Buffe
    否则两个文件会共享一份 `FileState` → 输出损坏。
 8. **控制通道的阻塞读没有 SO_TIMEOUT**（NIO SocketChannel 不支持，实测无效），
    需要超时的地方用 `ReadWatchdog`（超时关通道让阻塞读抛 `AsynchronousCloseException`）。
+9. **校验交换期间应答方会插入「空路径心跳」帧**（协议 304 起，`HFXService.sendChecksumHeartbeat`）：
+   它靠 `Utils.md5Hex(in, onProgress)` 每读完 1MB 发一次，用来告诉发起方「我还在算」。
+   读结果的一侧必须 `if (path.isEmpty()) continue;` 跳过，否则会把心跳当成路径、把真路径当成 md5，
+   帧错位后误报校验失败（而且不会有任何报错，只是结论不对）。
+   **心跳的回调里必须同时 `watchdog.touch()`**：只写帧不 touch 自己的话，应答方自己的看门狗
+   会在这段本地计算里判超时并关掉自己的控制通道（等于没修）。
+10. **检查点的 mtime 守卫只降低“目标文件被替换后续写”的概率**（`isCheckpointValid` 要求
+    `目标文件 mtime <= entry.timestamp`）：保留旧 mtime 的替换（`cp -p`、robocopy /COPY:T、备份还原）
+   依旧能通过；两端时钟偏差或强杀断电会让它误判成无效，退化为全量重传（方向安全）。
+   要真正确认完整性只能靠传输后 MD5 校验。
+11. **`WriteFileCall.cancel()` 必须保持幂等**：多通道中断时每个 `ReceiveFileCall` 都会调一次，
+   写失败路径也会再调一次；不幂等会把队列里同一批缓冲块重复归还，池里出现重复引用后
+   轻则下一次传输两个线程共用一块内存（数据错乱），重则 Android 侧 `freeBuffer` 二次 free。

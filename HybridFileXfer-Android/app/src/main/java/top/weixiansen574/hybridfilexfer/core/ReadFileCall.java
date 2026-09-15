@@ -194,7 +194,12 @@ public abstract class ReadFileCall implements Callable<Void>, ProgressSource {
                 i++;
             }
         } finally {
-            closeFile();
+            try {
+                closeFile();
+            } catch (Exception e) {
+                //关闭失败不能掩盖原始异常（与 WriteFileCall.closeCurrentFile 一致）
+                e.printStackTrace();
+            }
         }
     }
 

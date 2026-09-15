@@ -144,10 +144,17 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
                 int length = data.limit();
                 //FileChannel.write 不保证一次写完，必须循环写尽，
                 //否则剩余字节随缓冲区回收而永久丢失，在文件中留下空洞
-                while (data.hasRemaining()) {
-                    if (channel.write(data) <= 0) {
-                        throw new IOException("write stalled at " + cursor + ": " + block.path);
+                try {
+                    while (data.hasRemaining()) {
+                        if (channel.write(data) <= 0) {
+                            throw new IOException("write stalled at " + cursor + ": " + block.path);
+                        }
                     }
+                } catch (IOException e) {
+                    //写失败时这个块已经从队列取走，不归还就会丢一块（Android 侧是 1MB native 内存，
+                    //进程内下一次传输的缓冲池也跟着变小）
+                    buffers.add(data);
+                    throw e;
                 }
                 cursor += length;
                 completedBytes.addAndGet(length);
@@ -289,6 +296,13 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
     }
 
     public synchronized void cancel(){
+        //幂等：多通道中断时每个 ReceiveFileCall 都会调一次（N-1 次），写失败路径也会再调一次。
+        //不幂等的话，第二次会把队列里同一批块重复归还缓冲池——池里出现重复引用后，
+        //下一次传输可能把同一块内存同时交给两个线程（数据错乱），Android 侧还会被
+        //disconnect() 的 freeBuffer 循环二次 free（native 双重释放）
+        if (canceled) {
+            return;
+        }
         canceled = true;
         //回收未写入硬盘的块的ByteBuffer
         for (LinkedList<FileBlock> deque : dequeArray) {
@@ -297,6 +311,9 @@ public abstract class WriteFileCall implements Callable<Void>, ProgressSource {
                     buffers.add(fileBlock.data);
                 }
             }
+            //回收后必须清空：块留着会被写线程再取走一次（takeBlock 先查队列再查 canceled），
+            //它的缓冲块已经归还，会变成两个分块共用一块内存
+            deque.clear();
         }
         notify();
     }

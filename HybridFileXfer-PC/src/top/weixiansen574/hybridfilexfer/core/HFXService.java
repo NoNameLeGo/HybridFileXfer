@@ -407,6 +407,8 @@ public abstract class HFXService {
         if (transferPaths.isEmpty()) {
             //清单为空也要把结果帧发出去：请求校验的一方（PC 的 -x）在控制循环里等这条帧，
             //不回它就永远看不到校验结论（传输已成功，但结果栏一直空着）
+            //注：这种情况下对端会显示「校验通过」——本次没有文件可校验，属于空洞地成立，
+            //真要区分“没校验”与“校验过且一致”需要再动一次协议，暂不做。
             if (peerRequestsChecksum) {
                 ctChannel.writeShort(ControllerIdentifiers.FILE_CHECKSUM_RESULT);
                 ctChannel.writeInt(0);
@@ -488,9 +490,14 @@ public abstract class HFXService {
             for (int i = 0; i < count; i++) {
                 String transferPath = ctChannel.readUTF();
                 watchdog.touch();
-                //算 MD5 期间持续发心跳：单个大文件（慢速存储上可能超过看门狗阈值）时，
-                //发起方的看门狗靠这些空路径帧判定「对端还在干活」
-                String md5 = localMd5(transferPath, this::sendChecksumHeartbeat);
+                //算 MD5 期间持续报活：
+                //  - 发心跳帧：让**对端**的看门狗知道本端还在算（单个大文件可能超过超时阈值）；
+                //  - touch 本端看门狗：心跳只写帧，不 touch 自己的话，本端看门狗会在这段本地计算里
+                //    判超时并关掉自己的控制通道，症状与不修时一模一样
+                String md5 = localMd5(transferPath, () -> {
+                    watchdog.touch();
+                    sendChecksumHeartbeat();
+                });
                 ctChannel.writeUTF(transferPath);
                 ctChannel.writeUTF(md5 == null ? "" : md5);
             }

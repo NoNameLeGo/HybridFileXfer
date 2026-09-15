@@ -17,7 +17,9 @@
  *   <li>空文件检查点可清除；</li>
  *   <li>目标已存在更长的同名文件时，落盘后不得残留旧尾巴（truncate）；</li>
  *   <li>文件名清洗（非法字符 / 尾部点空格 / Windows 保留设备名 / 超长段）与传输路径去重；</li>
- *   <li>校验交换的读超时看门狗（对端卡死时能解除阻塞，有进展时不误杀）。</li>
+ *   <li>校验交换的读超时看门狗（对端卡死时能解除阻塞，有进展时不误杀）；</li>
+ *   <li>校验应答的空路径心跳帧（协议 304）与 md5 报活回调；</li>
+ *   <li>检查点 mtime 守卫（目标文件在记录之后被改过则作废）与 cancel() 后的缓冲块回收。</li>
  * </ol>
  */
 import top.weixiansen574.hybridfilexfer.core.CheckpointEntry;
@@ -349,6 +351,8 @@ public class WatermarkProbe {
                     out.writeUTF(expected);
                 } catch (Exception e) {
                     e.printStackTrace();
+                    //应答方挂了就关掉通道，否则发起方要等看门狗阈值（10 分钟）才失败，CI 会僵住
+                    try { responderSide.close(); } catch (Exception ignored) { }
                 }
             });
             responder.setDaemon(true);
@@ -391,6 +395,62 @@ public class WatermarkProbe {
             checkTrue("跳过心跳后校验通过（旧代码会把空路径当文件名 → 误报失败）", passed[0]);
             checkTrue("失败清单为空", mismatches[0] != null && mismatches[0].isEmpty());
             initiatorSide.close(); responderSide.close(); srv7.close();
+        }
+
+        // ===== 场景 8：检查点 mtime 守卫与 cancel 后的缓冲块回收（本轮新增的两处逻辑） =====
+        {
+            System.out.println("[场景8] 检查点有效性守卫 + cancel 后归还缓冲块");
+            File guarded = new File(dir, "guarded.bin");
+            Files.write(guarded.toPath(), new byte[100]);
+            long mtime = guarded.lastModified();
+
+            java.lang.reflect.Method valid = top.weixiansen574.hybridfilexfer.jdkcore.JdkHFXClient.class
+                    .getDeclaredMethod("isCheckpointValid", String.class, CheckpointEntry.class);
+            valid.setAccessible(true);
+            top.weixiansen574.hybridfilexfer.jdkcore.JdkHFXClient probe =
+                    new top.weixiansen574.hybridfilexfer.jdkcore.JdkHFXClient("127.0.0.1", 0, dir.getPath());
+
+            checkTrue("文件未被改动过（mtime <= 记录时间）→ 续传可用",
+                    (Boolean) valid.invoke(probe, guarded.getPath(),
+                            new CheckpointEntry(guarded.getPath(), 200, mtime, 50, "peer", mtime + 1000)));
+            checkTrue("文件在记录之后被改过（mtime > 记录时间）→ 作废",
+                    !(Boolean) valid.invoke(probe, guarded.getPath(),
+                            new CheckpointEntry(guarded.getPath(), 200, mtime, 50, "peer", mtime - 1000)));
+            checkTrue("长度小于已完成字节 → 作废",
+                    !(Boolean) valid.invoke(probe, guarded.getPath(),
+                            new CheckpointEntry(guarded.getPath(), 200, mtime, 150, "peer", mtime + 1000)));
+            checkTrue("文件不存在 → 作废",
+                    !(Boolean) valid.invoke(probe, new File(dir, "not-exist.bin").getPath(),
+                            new CheckpointEntry("x", 200, mtime, 50, "peer", mtime + 1000)));
+
+            //cancel() 之后到达的块必须直接归还缓冲池（否则 Android 侧每块 1MB native 内存再也回不来）
+            String p8 = new File(dir, "cancelled.bin").getPath();
+            LinkedBlockingDeque<ByteBuffer> pool8 = pool(4);
+            WriteFileCall w8 = new JdkWriteFileCall(pool8, 1, new HashMap<>(), new RecordingCM(), "peer");
+            int before = pool8.size();
+            w8.cancel();
+            w8.putBlock(block(p8, MB, 0, MB, (byte) 7), 0);
+            checkTrue("cancel 后到达的块归还了缓冲池（前 " + before + " → 后 " + pool8.size() + "）",
+                    pool8.size() == before + 1);
+            checkTrue("cancel 后到达的块未被写入磁盘", !new File(p8).exists());
+
+            //cancel() 幂等：多通道中断时会被调用多次，重复调用不得把同一批块重复归还（池里出现重复引用
+            //会让后续传输两个线程共用一块内存，Android 侧还会二次 free）
+            String p9 = new File(dir, "cancel-twice.bin").getPath();
+            LinkedBlockingDeque<ByteBuffer> pool9 = pool(2);
+            WriteFileCall w9 = new JdkWriteFileCall(pool9, 1, new HashMap<>(), new RecordingCM(), "peer");
+            int before9 = pool9.size();
+            w9.putBlock(block(p9, 2L * MB, 0, MB, (byte) 1), 0);
+            w9.putBlock(block(p9, 2L * MB, 1, MB, (byte) 2), 0);
+            w9.cancel();
+            int afterFirstCancel = pool9.size();
+            checkTrue("cancel() 第一次归还了队列里的 2 块（" + before9 + " → " + afterFirstCancel + "）",
+                    afterFirstCancel == before9 + 2);
+            //队列必须清空：块留着会被写线程再取走一次（takeBlock 先查队列再查 canceled），
+            //而它的缓冲块已经归还，可能已被别的线程复用 → 数据错乱
+            checkTrue("cancel() 后队列已清空（取不到残留块）", w9.tryTakeBlockInternal() == null);
+            w9.cancel();
+            checkTrue("cancel() 幂等：重复调用不再重复入池", pool9.size() == afterFirstCancel);
         }
 
         System.out.println();

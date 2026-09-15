@@ -127,9 +127,9 @@ public class HFXServer extends HFXService {
                     ctChannel.writeBoolean(false);
                     ctChannel.close();
                     callback.onAcceptFailed(name);
-                    //本轮已 accept 的传输通道必须关掉：continue conn 会把 connections 整个丢掉，
+                    //本轮已 accept 的传输通道必须关掉：continue conn 会把局部 connections 整个丢掉，
                     //不关则 App 进程里 socket fd 随每次失败累积（选多个网卡时更明显）
-                    closeAcceptedConnections();
+                    closeAcceptedConnections(connections);
                     continue conn;
                 }
             }
@@ -141,7 +141,7 @@ public class HFXServer extends HFXService {
         ctChannel.writeInt(remoteBufferCount);
         if (!ctChannel.readBoolean()) {
             callback.onPcOOM();
-            closeAcceptedConnections();
+            closeAcceptedConnections(connections);
             serverSocketChannel.close();
             return;
         }
@@ -157,7 +157,7 @@ public class HFXServer extends HFXService {
                 }
                 buffers.clear();
                 ctChannel.writeBoolean(false);
-                closeAcceptedConnections();
+                closeAcceptedConnections(connections);
                 serverSocketChannel.close();
                 callback.onMeOOM(i, localBufferCount);
                 return;
@@ -185,18 +185,23 @@ public class HFXServer extends HFXService {
         }
     }
 
-    /** 关闭本轮握手已 accept 的传输通道（失败/OOM 路径上 connections 会被丢弃，不关就泄漏 fd） */
-    private void closeAcceptedConnections() {
-        if (connections == null) {
+    /**
+     * 关闭本轮握手已 accept 的传输通道。
+     * <p>必须把列表显式传进来：{@code startServer} 里有个同名**局部变量**遮住了
+     * {@link HFXService#connections} 字段，而字段要到握手末尾才赋值——helper 去读字段只会拿到 null，
+     * 这些失败路径上一个都关不掉（fd 依旧泄漏）。</p>
+     */
+    private void closeAcceptedConnections(List<TransferConnection> accepted) {
+        if (accepted == null) {
             return;
         }
-        for (TransferConnection connection : connections) {
+        for (TransferConnection connection : accepted) {
             try {
                 connection.close();
             } catch (IOException ignored) {
             }
         }
-        connections = null;
+        accepted.clear();
     }
 
     public void disconnect(BackstageTask.BaseEventHandler callback) {
